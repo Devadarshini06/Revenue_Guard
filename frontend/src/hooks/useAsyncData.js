@@ -24,3 +24,4 @@ export function useAsyncData(fetchFn, dependencies = []) {
 
   return { data, loading, error, refresh: execute };
 }
+

@@ -240,3 +240,4 @@ export const MOCK_BUSINESS_INSIGHTS = [
     category: 'Refund'
   }
 ];
+

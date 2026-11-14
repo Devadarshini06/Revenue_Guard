@@ -154,3 +154,4 @@ export const MOCK_VALIDATION_SAMPLE = {
     { order_number: 'ORD-2026-005204', order_date: '2026-11-13', customer_code: 'CUST-00007', product_sku: 'PRD-HW-02', quantity: 1, unit_price: 5400.0, discount_amount: 0.0 }
   ]
 };
+

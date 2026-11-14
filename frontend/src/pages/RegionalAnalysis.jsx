@@ -10,7 +10,7 @@ import {
   Legend
 } from 'recharts';
 import { Globe2, MapPin, Building2, TrendingUp, AlertCircle } from 'lucide-react';
-import { api } from '../api';
+import { api } from '../services/api';
 import ChartCard from '../components/common/ChartCard';
 import DataTable from '../components/common/DataTable';
 import LoadingSpinner from '../components/common/LoadingSpinner';

@@ -25,3 +25,4 @@ export const MOCK_FILTER_OPTIONS = {
   min_date: '2024-06-01',
   max_date: '2026-11-14'
 };
+

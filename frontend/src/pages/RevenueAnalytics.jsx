@@ -14,7 +14,7 @@ import {
   Legend
 } from 'recharts';
 import { TrendingUp, DollarSign, ArrowUpRight, ArrowDownRight, Layers, Globe, Filter } from 'lucide-react';
-import { api } from '../api';
+import { api } from '../services/api';
 import ChartCard from '../components/common/ChartCard';
 import KPICard from '../components/common/KPICard';
 import LoadingSpinner from '../components/common/LoadingSpinner';

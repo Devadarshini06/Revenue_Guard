@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Settings as SettingsIcon, Database, Shield, Bell, DollarSign, CheckCircle2, RefreshCw } from 'lucide-react';
-import { api } from '../api';
+import { api } from '../services/api';
 
 export default function Settings() {
   const [currency, setCurrency] = useState('USD');
@@ -50,15 +50,15 @@ export default function Settings() {
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
           <div className="p-3 rounded-lg bg-background border border-border">
             <span className="text-brand-gray text-[10px] uppercase font-semibold">Engine / Dialect</span>
-            <div className="text-brand-dark font-mono font-bold mt-1">PostgreSQL & SQLite Dual Engine</div>
+            <div className="text-brand-dark font-mono font-bold mt-1">Standalone Mock Analytics Engine</div>
           </div>
           <div className="p-3 rounded-lg bg-background border border-border">
             <span className="text-brand-gray text-[10px] uppercase font-semibold">Indexed Orders Pool</span>
-            <div className="text-brand-dark font-mono font-bold mt-1">5,200 Seeded Records</div>
+            <div className="text-brand-dark font-mono font-bold mt-1">5,200 In-Memory Records</div>
           </div>
           <div className="p-3 rounded-lg bg-background border border-border">
             <span className="text-brand-gray text-[10px] uppercase font-semibold">Query Latency</span>
-            <div className="text-emerald-700 font-mono font-bold mt-1">&lt; 15ms Execution Time</div>
+            <div className="text-emerald-700 font-mono font-bold mt-1">&lt; 1ms Instant Response</div>
           </div>
         </div>
       </div>

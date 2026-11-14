@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Package, Award, TrendingDown, ArrowUpDown, Tag } from 'lucide-react';
-import { api } from '../api';
+import { api } from '../services/api';
 import DataTable from '../components/common/DataTable';
 import LoadingSpinner from '../components/common/LoadingSpinner';
 

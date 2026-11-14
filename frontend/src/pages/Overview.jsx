@@ -28,7 +28,7 @@ import {
   AreaChart,
   Area
 } from 'recharts';
-import { api } from '../api';
+import { api } from '../services/api';
 import KPICard from '../components/common/KPICard';
 import ChartCard from '../components/common/ChartCard';
 import InsightBanner from '../components/common/InsightBanner';
