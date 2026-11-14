@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import Sidebar from './components/layout/Sidebar';
-import Navbar from './components/layout/Navbar';
+import MainLayout from './layouts/MainLayout';
 import Overview from './pages/Overview';
 import RevenueAnalytics from './pages/RevenueAnalytics';
 import SalesPerformance from './pages/SalesPerformance';
@@ -13,24 +12,16 @@ import RegionalAnalysis from './pages/RegionalAnalysis';
 import ReportsExports from './pages/ReportsExports';
 import DataManagement from './pages/DataManagement';
 import Settings from './pages/Settings';
-import { api } from './api';
+import { useFilters } from './hooks/useFilters';
+import { api } from './services/api';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('overview');
-  const [isMobileOpen, setIsMobileOpen] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [filterOptions, setFilterOptions] = useState(null);
+  const { filters, setFilters } = useFilters();
 
-  const [filters, setFilters] = useState({
-    start_date: '',
-    end_date: '',
-    category_id: undefined,
-    region_id: undefined,
-    search: '',
-    datePreset: 'all'
-  });
-
-  // Load global filter bounds and categories
+  // Load global filter bounds and categories from centralized mock service
   useEffect(() => {
     api.getFilters()
       .then((opts) => setFilterOptions(opts))
@@ -39,10 +30,9 @@ export default function App() {
 
   const handleRefresh = useCallback(() => {
     setIsRefreshing(true);
-    // Trigger re-render by creating a new filter object reference
     setFilters(prev => ({ ...prev, _timestamp: Date.now() }));
-    setTimeout(() => setIsRefreshing(false), 800);
-  }, []);
+    setTimeout(() => setIsRefreshing(false), 500);
+  }, [setFilters]);
 
   const renderActivePage = () => {
     switch (activeTab) {
@@ -76,33 +66,16 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-[#FAF9F6] flex">
-      {/* 1. Left Sidebar Navigation */}
-      <Sidebar
-        activeTab={activeTab}
-        setActiveTab={setActiveTab}
-        isMobileOpen={isMobileOpen}
-        setIsMobileOpen={setIsMobileOpen}
-      />
-
-      {/* Main Content Area */}
-      <div className="flex-1 flex flex-col min-w-0 lg:pl-64">
-        {/* 2. Top Navigation Bar */}
-        <Navbar
-          filters={filters}
-          setFilters={setFilters}
-          filterOptions={filterOptions}
-          onRefresh={handleRefresh}
-          isRefreshing={isRefreshing}
-          setIsMobileOpen={setIsMobileOpen}
-        />
-
-        {/* 3. Page Content Wrapper */}
-        <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-7xl w-full mx-auto">
-          {renderActivePage()}
-        </main>
-      </div>
-    </div>
+    <MainLayout
+      activeTab={activeTab}
+      setActiveTab={setActiveTab}
+      filters={filters}
+      setFilters={setFilters}
+      filterOptions={filterOptions}
+      onRefresh={handleRefresh}
+      isRefreshing={isRefreshing}
+    >
+      {renderActivePage()}
+    </MainLayout>
   );
 }
-

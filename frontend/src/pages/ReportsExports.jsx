@@ -8,30 +8,34 @@ import {
   Calendar,
   Layers,
   ArrowRight,
-  Sparkles
+  Sparkles,
+  Eye,
+  X
 } from 'lucide-react';
-import { api } from '../api';
+import { api } from '../services/api';
 
 export default function ReportsExports({ filters }) {
   const [downloading, setDownloading] = useState(null);
   const [summaryData, setSummaryData] = useState(null);
   const [generatingSummary, setGeneratingSummary] = useState(false);
+  const [showPowerBIModal, setShowPowerBIModal] = useState(false);
+  const [powerBIData, setPowerBIData] = useState(null);
 
-  const handleDownloadCsv = async () => {
+  const handleDownloadCsv = () => {
     setDownloading('csv');
     try {
-      window.location.href = '/api/reports/export/transactions/csv';
+      api.exportTransactionsCSV();
     } finally {
-      setTimeout(() => setDownloading(null), 1500);
+      setTimeout(() => setDownloading(null), 800);
     }
   };
 
-  const handleDownloadExcel = async () => {
+  const handleDownloadExcel = () => {
     setDownloading('excel');
     try {
-      window.location.href = '/api/reports/export/transactions/excel';
+      api.exportTransactionsExcel();
     } finally {
-      setTimeout(() => setDownloading(null), 2000);
+      setTimeout(() => setDownloading(null), 800);
     }
   };
 
@@ -47,6 +51,12 @@ export default function ReportsExports({ filters }) {
     }
   };
 
+  const handleOpenPowerBI = async () => {
+    const data = await api.getPowerBIDataset();
+    setPowerBIData(data);
+    setShowPowerBIModal(true);
+  };
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -55,7 +65,7 @@ export default function ReportsExports({ filters }) {
           Reports, Business Intelligence & Data Exports
         </h1>
         <p className="text-xs text-brand-gray mt-0.5">
-          Generate board-ready performance summaries and export Power BI-compliant relational datasets.
+          Generate board-ready performance summaries and export Power BI-compliant relational datasets (Offline Mock Engine).
         </p>
       </div>
 
@@ -81,7 +91,7 @@ export default function ReportsExports({ filters }) {
             className="w-full flex items-center justify-center gap-2 py-2.5 px-4 bg-background border border-border rounded-lg text-xs font-semibold text-brand-dark hover:bg-card hover:border-bronze transition-colors shadow-2xs"
           >
             <Download size={14} className={downloading === 'csv' ? 'animate-bounce' : ''} />
-            <span>{downloading === 'csv' ? 'Preparing CSV...' : 'Download CSV (.csv)'}</span>
+            <span>{downloading === 'csv' ? 'Exporting...' : 'Download CSV (.csv)'}</span>
           </button>
         </div>
 
@@ -105,7 +115,7 @@ export default function ReportsExports({ filters }) {
             className="w-full flex items-center justify-center gap-2 py-2.5 px-4 bg-brand-dark text-white rounded-lg text-xs font-semibold hover:bg-black transition-colors shadow-2xs"
           >
             <Download size={14} className={downloading === 'excel' ? 'animate-bounce' : ''} />
-            <span>{downloading === 'excel' ? 'Generating Workbook...' : 'Download Excel (.xlsx)'}</span>
+            <span>{downloading === 'excel' ? 'Exporting...' : 'Download Excel (.xlsx)'}</span>
           </button>
         </div>
 
@@ -124,11 +134,11 @@ export default function ReportsExports({ filters }) {
           </div>
 
           <button
-            onClick={() => window.open('/api/reports/power-bi/dataset', '_blank')}
+            onClick={handleOpenPowerBI}
             className="w-full flex items-center justify-center gap-2 py-2.5 px-4 bg-background border border-border rounded-lg text-xs font-semibold text-brand-dark hover:bg-card hover:border-bronze transition-colors shadow-2xs"
           >
-            <Database size={14} />
-            <span>Open Power BI JSON Feed</span>
+            <Eye size={14} />
+            <span>Inspect Power BI Dataset</span>
           </button>
         </div>
       </div>
@@ -201,7 +211,44 @@ export default function ReportsExports({ filters }) {
           </div>
         )}
       </div>
+
+      {/* Power BI Dataset Inspector Modal */}
+      {showPowerBIModal && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-xs">
+          <div className="bg-card border border-border rounded-xl shadow-elevated w-full max-w-2xl max-h-[85vh] flex flex-col overflow-hidden">
+            <div className="p-4 border-b border-border flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Database size={16} className="text-amber-600" />
+                <h3 className="text-sm font-bold text-brand-dark">Power BI Star-Schema Dimensional Dataset</h3>
+              </div>
+              <button
+                onClick={() => setShowPowerBIModal(false)}
+                className="p-1 text-brand-gray hover:text-brand-dark rounded"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="p-4 overflow-y-auto flex-1 font-mono text-xs">
+              <div className="mb-2 text-[11px] text-brand-gray font-sans">
+                Sample preview of transactional dimensional attributes ready for Power BI OData or JSON ingestion:
+              </div>
+              <pre className="p-3 bg-[#231F1D] text-[#E5E1DD] rounded-lg overflow-x-auto text-[11px] leading-relaxed">
+                {JSON.stringify(powerBIData?.slice(0, 3), null, 2)}
+              </pre>
+            </div>
+
+            <div className="p-3 border-t border-border bg-background flex justify-end">
+              <button
+                onClick={() => setShowPowerBIModal(false)}
+                className="px-4 py-1.5 bg-brand-dark text-white rounded-lg text-xs font-semibold"
+              >
+                Close Preview
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
-
