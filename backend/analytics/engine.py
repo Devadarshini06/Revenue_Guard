@@ -1,3 +1,11 @@
+import sys
+from pathlib import Path
+
+# Ensure project root is in sys.path when running script directly
+project_root = str(Path(__file__).resolve().parent.parent.parent)
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
@@ -397,3 +405,71 @@ class AnalyticsEngine:
             }
             for r in rows
         ]
+
+
+if __name__ == "__main__":
+    from backend.database import SessionLocal
+
+    print("=" * 80)
+    print("  REVENUEGUARD ENTERPRISE ANALYTICS ENGINE")
+    print("  Executing high-performance SQL + Pandas data transformations...")
+    print("=" * 80)
+
+    db = SessionLocal()
+    try:
+        engine = AnalyticsEngine(db)
+
+        # 1. Executive Dashboard KPIs
+        print("\n[1] CALCULATING EXECUTIVE KPIS (Trailing 12 Months vs Prior Period)...")
+        kpis = engine.calculate_dashboard_kpis()
+        for key, data in kpis.items():
+            val_str = data["formatted_value"]
+            pct_str = data["formatted_change"]
+            print(f"  • {key.replace('_', ' ').title():<22}: {val_str:>14}  ({pct_str} vs prior)")
+
+        # 2. Monthly Revenue Trend
+        print("\n[2] MONTHLY REVENUE & PROFIT TREND (Latest 6 Months):")
+        trends = engine.get_monthly_revenue_trend()
+        print(f"  {'Month':<10} | {'Gross Revenue':>14} | {'Net Revenue':>14} | {'Gross Profit':>14} | {'Orders':>8}")
+        print("  " + "-" * 72)
+        for t in trends[-6:]:  # show latest 6 months
+            print(f"  {t['label']:<10} | ${t['gross_revenue']:>13,.2f} | ${t['net_revenue']:>13,.2f} | ${t['profit']:>13,.2f} | {t['orders_count']:>8,}")
+
+        # 3. Top Products by Revenue
+        print("\n[3] TOP 5 PERFORMING PRODUCTS:")
+        top_products = engine.get_top_products(limit=5)
+        print(f"  {'Product Name':<32} | {'Category':<15} | {'Units Sold':>10} | {'Revenue':>12}")
+        print("  " + "-" * 78)
+        for p in top_products:
+            print(f"  {p['name'][:30]:<32} | {p['category_name'][:13]:<15} | {p['units_sold']:>10,} | ${p['revenue']:>11,.2f}")
+
+        # 4. Category Breakdown
+        print("\n[4] REVENUE CONTRIBUTION BY CATEGORY:")
+        categories = engine.get_category_breakdown()
+        for c in categories:
+            bar = "█" * int(c["percentage"] / 2.5)
+            print(f"  • {c['category_name']:<20}: ${c['revenue']:>12,.2f} ({c['percentage']:>5.1f}%) {bar}")
+
+        # 5. Discount & Refund Leakage
+        print("\n[5] FINANCIAL DEDUCTIONS & LEAKAGE:")
+        discount_items = engine.get_discount_analysis()
+        total_discount_leakage = sum(d["total_discount"] for d in discount_items)
+        refunds = engine.get_refund_reasons()
+        total_refund_leakage = sum(r["total_amount"] for r in refunds)
+        print(f"  • Total Discount Leakage : ${total_discount_leakage:,.2f} across {len(discount_items)} discount strategies")
+        print(f"  • Total Refund Leakage   : ${total_refund_leakage:,.2f}")
+        if refunds:
+            print(f"  • Primary Refund Driver  : {refunds[0]['reason']} (${refunds[0]['total_amount']:,.2f} - {refunds[0]['percentage']:.1f}% of refunds)")
+
+        # 6. Recent Transactions Sample
+        print("\n[6] RECENT TRANSACTIONS (Top 3 Records):")
+        txs = engine.get_recent_transactions(limit=3)
+        for tx in txs:
+            print(f"  • [{tx['order_number']}] {tx['order_date'][:10]} | {tx['customer_name']} ({tx['customer_segment']}) -> Net: ${tx['net_amount']:,.2f} | Status: {tx['status']}")
+
+        print("\n" + "=" * 80)
+        print("  ✓ Analytics Engine executed successfully. All metrics computed without errors.")
+        print("=" * 80)
+
+    finally:
+        db.close()

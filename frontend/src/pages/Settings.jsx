@@ -3,14 +3,27 @@ import { Settings as SettingsIcon, Database, Shield, Bell, DollarSign, CheckCirc
 import { api } from '../services/api';
 
 export default function Settings() {
-  const [currency, setCurrency] = useState('USD');
-  const [fiscalYearStart, setFiscalYearStart] = useState('01');
-  const [marginAlertThreshold, setMarginAlertThreshold] = useState('25.0');
+  const [currency, setCurrency] = useState(() => {
+    return localStorage.getItem('rg_setting_currency') || 'USD';
+  });
+  const [fiscalYearStart, setFiscalYearStart] = useState(() => {
+    return localStorage.getItem('rg_setting_fiscalYearStart') || '01';
+  });
+  const [marginAlertThreshold, setMarginAlertThreshold] = useState(() => {
+    return localStorage.getItem('rg_setting_marginAlertThreshold') || '25.0';
+  });
   const [dbStatus, setDbStatus] = useState({ status: 'Connected', latency: '1.2ms', rows: '5,200+' });
   const [saved, setSaved] = useState(false);
 
   const handleSave = (e) => {
     e.preventDefault();
+    try {
+      localStorage.setItem('rg_setting_currency', currency);
+      localStorage.setItem('rg_setting_fiscalYearStart', fiscalYearStart);
+      localStorage.setItem('rg_setting_marginAlertThreshold', marginAlertThreshold);
+    } catch (err) {
+      console.warn('LocalStorage save failed:', err);
+    }
     setSaved(true);
     setTimeout(() => setSaved(false), 3000);
   };

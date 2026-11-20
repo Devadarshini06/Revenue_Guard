@@ -55,14 +55,10 @@ export default function RevenueAnalytics({ filters }) {
     return () => { isMounted = false; };
   }, [filters]);
 
-  if (loading && !summary) {
-    return <LoadingSpinner text="Running multi-period revenue calculations..." />;
-  }
-
-  // Quarterly aggregated trends from monthly data
+  // Quarterly aggregated trends from monthly data (Hooks must always run before any return)
   const quarterlyTrends = React.useMemo(() => {
     const quarters = {};
-    trends.forEach((t) => {
+    (trends || []).forEach((t) => {
       const parts = t.date.split('-');
       const year = parts[0];
       const month = parseInt(parts[1], 10);
@@ -88,6 +84,10 @@ export default function RevenueAnalytics({ filters }) {
     });
     return Object.values(quarters);
   }, [trends]);
+
+  if (loading && !summary) {
+    return <LoadingSpinner text="Running multi-period revenue calculations..." />;
+  }
 
   const displayTrends = timeGrain === 'quarterly' ? quarterlyTrends : trends;
 
