@@ -35,7 +35,7 @@ class AnalyticsEngine:
         self.db = db
 
     def get_date_bounds(self, start_date: Optional[str] = None, end_date: Optional[str] = None):
-        """Resolves date range and previous equivalent comparison period."""
+        """Resolves date range and previous equivalent comparison period with end-of-day precision."""
         if not end_date:
             latest_order = self.db.query(Order.order_date).order_by(Order.order_date.desc()).first()
             if latest_order and latest_order[0]:
@@ -43,12 +43,20 @@ class AnalyticsEngine:
             else:
                 end_dt = datetime.utcnow()
         else:
-            end_dt = datetime.fromisoformat(end_date.replace("Z", ""))
+            clean_end = end_date.replace("Z", "")
+            if len(clean_end) == 10:
+                end_dt = datetime.fromisoformat(clean_end).replace(hour=23, minute=59, second=59)
+            else:
+                end_dt = datetime.fromisoformat(clean_end)
 
         if not start_date:
             start_dt = end_dt - timedelta(days=365) # default 12 months
         else:
-            start_dt = datetime.fromisoformat(start_date.replace("Z", ""))
+            clean_start = start_date.replace("Z", "")
+            if len(clean_start) == 10:
+                start_dt = datetime.fromisoformat(clean_start).replace(hour=0, minute=0, second=0)
+            else:
+                start_dt = datetime.fromisoformat(clean_start)
 
         delta = end_dt - start_dt
         prev_end_dt = start_dt
@@ -150,9 +158,10 @@ class AnalyticsEngine:
         self,
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
-        region_id: Optional[int] = None
+        region_id: Optional[int] = None,
+        grain: str = "monthly"
     ) -> List[Dict[str, Any]]:
-        """Calculates monthly revenue, profit, discounts, and refunds with growth rates."""
+        """Calculates monthly or quarterly revenue, profit, discounts, and refunds with growth rates."""
         cur_start, cur_end, _, _ = self.get_date_bounds(start_date, end_date)
 
         rows = self.db.execute(
@@ -187,6 +196,48 @@ class AnalyticsEngine:
                 "refunds": round(float(r["total_refunds"] or 0), 2),
                 "growth_rate": float(r["revenue_growth_rate"] or 0)
             })
+
+        if grain == "quarterly":
+            quarterly = {}
+            for t in trend:
+                year, month = t["date"].split("-")
+                q = (int(month) - 1) // 3 + 1
+                q_key = f"{year}-Q{q}"
+                q_label = f"Q{q} '{year[-2:]}"
+                if q_key not in quarterly:
+                    quarterly[q_key] = {
+                        "date": q_key,
+                        "label": q_label,
+                        "gross_revenue": 0.0,
+                        "net_revenue": 0.0,
+                        "total_revenue": 0.0,
+                        "profit": 0.0,
+                        "orders_count": 0,
+                        "discounts": 0.0,
+                        "refunds": 0.0,
+                    }
+                quarterly[q_key]["gross_revenue"] += t["gross_revenue"]
+                quarterly[q_key]["net_revenue"] += t["net_revenue"]
+                quarterly[q_key]["total_revenue"] += t["total_revenue"]
+                quarterly[q_key]["profit"] += t["profit"]
+                quarterly[q_key]["orders_count"] += t["orders_count"]
+                quarterly[q_key]["discounts"] += t["discounts"]
+                quarterly[q_key]["refunds"] += t["refunds"]
+
+            q_list = list(quarterly.values())
+            for idx, q_data in enumerate(q_list):
+                prev_net = q_list[idx - 1]["net_revenue"] if idx > 0 else None
+                if prev_net and prev_net > 0:
+                    q_data["growth_rate"] = round(((q_data["net_revenue"] - prev_net) * 100.0 / prev_net), 2)
+                else:
+                    q_data["growth_rate"] = 0.0
+                q_data["gross_revenue"] = round(q_data["gross_revenue"], 2)
+                q_data["net_revenue"] = round(q_data["net_revenue"], 2)
+                q_data["total_revenue"] = round(q_data["total_revenue"], 2)
+                q_data["profit"] = round(q_data["profit"], 2)
+                q_data["discounts"] = round(q_data["discounts"], 2)
+                q_data["refunds"] = round(q_data["refunds"], 2)
+            return q_list
 
         return trend
 

@@ -6,39 +6,81 @@ Window Functions (LAG, RANK, DENSE_RANK), Multi-table JOINS, and Group By Aggreg
 Dual compatible with PostgreSQL and SQLite.
 """
 
-# 1. Total and Net Revenue with Period Comparison (CTE + Aggregations)
+# 1. Total and Net Revenue with Period Comparison (CTE + Pre-Aggregations)
 KPI_SUMMARY_QUERY = """
-WITH current_period AS (
+WITH cur_items AS (
     SELECT
-        COUNT(DISTINCT o.id) AS total_orders,
+        oi.order_id,
         COALESCE(SUM(oi.gross_revenue), 0.0) AS gross_revenue,
         COALESCE(SUM(oi.discount_amount), 0.0) AS total_discounts,
-        COALESCE(SUM(r.refund_amount), 0.0) AS total_refunds,
-        COALESCE(SUM(oi.net_revenue), 0.0) - COALESCE(SUM(r.refund_amount), 0.0) AS net_revenue,
-        COALESCE(SUM(oi.cogs), 0.0) AS total_cogs,
-        (COALESCE(SUM(oi.net_revenue), 0.0) - COALESCE(SUM(r.refund_amount), 0.0) - COALESCE(SUM(oi.cogs), 0.0)) AS gross_profit
+        COALESCE(SUM(oi.net_revenue), 0.0) AS net_revenue,
+        COALESCE(SUM(oi.cogs), 0.0) AS total_cogs
+    FROM order_items oi
+    JOIN products p ON oi.product_id = p.id
+    WHERE (:category_id IS NULL OR p.category_id = :category_id)
+    GROUP BY oi.order_id
+),
+cur_refunds AS (
+    SELECT
+        r.order_id,
+        COALESCE(SUM(r.refund_amount), 0.0) AS total_refunds
+    FROM refunds r
+    JOIN order_items oi ON r.order_item_id = oi.id
+    JOIN products p ON oi.product_id = p.id
+    WHERE (:category_id IS NULL OR p.category_id = :category_id)
+    GROUP BY r.order_id
+),
+current_period AS (
+    SELECT
+        COUNT(DISTINCT o.id) AS total_orders,
+        COALESCE(SUM(ci.gross_revenue), 0.0) AS gross_revenue,
+        COALESCE(SUM(ci.total_discounts), 0.0) AS total_discounts,
+        COALESCE(SUM(cr.total_refunds), 0.0) AS total_refunds,
+        (COALESCE(SUM(ci.net_revenue), 0.0) - COALESCE(SUM(cr.total_refunds), 0.0)) AS net_revenue,
+        COALESCE(SUM(ci.total_cogs), 0.0) AS total_cogs,
+        (COALESCE(SUM(ci.net_revenue), 0.0) - COALESCE(SUM(cr.total_refunds), 0.0) - COALESCE(SUM(ci.total_cogs), 0.0)) AS gross_profit
     FROM orders o
-    LEFT JOIN order_items oi ON o.id = oi.order_id
-    LEFT JOIN refunds r ON o.id = r.order_id
+    JOIN cur_items ci ON o.id = ci.order_id
+    LEFT JOIN cur_refunds cr ON o.id = cr.order_id
     WHERE o.order_date >= :start_date AND o.order_date <= :end_date
       AND (:region_id IS NULL OR o.region_id = :region_id)
-      AND (:category_id IS NULL OR oi.product_id IN (SELECT id FROM products WHERE category_id = :category_id))
+),
+prev_items AS (
+    SELECT
+        oi.order_id,
+        COALESCE(SUM(oi.gross_revenue), 0.0) AS gross_revenue,
+        COALESCE(SUM(oi.discount_amount), 0.0) AS total_discounts,
+        COALESCE(SUM(oi.net_revenue), 0.0) AS net_revenue,
+        COALESCE(SUM(oi.cogs), 0.0) AS total_cogs
+    FROM order_items oi
+    JOIN products p ON oi.product_id = p.id
+    WHERE (:category_id IS NULL OR p.category_id = :category_id)
+    GROUP BY oi.order_id
+),
+prev_refunds AS (
+    SELECT
+        r.order_id,
+        COALESCE(SUM(r.refund_amount), 0.0) AS total_refunds
+    FROM refunds r
+    JOIN order_items oi ON r.order_item_id = oi.id
+    JOIN products p ON oi.product_id = p.id
+    WHERE (:category_id IS NULL OR p.category_id = :category_id)
+    GROUP BY r.order_id
 ),
 previous_period AS (
     SELECT
         COUNT(DISTINCT o.id) AS total_orders,
-        COALESCE(SUM(oi.gross_revenue), 0.0) AS gross_revenue,
-        COALESCE(SUM(oi.discount_amount), 0.0) AS total_discounts,
-        COALESCE(SUM(r.refund_amount), 0.0) AS total_refunds,
-        COALESCE(SUM(oi.net_revenue), 0.0) - COALESCE(SUM(r.refund_amount), 0.0) AS net_revenue,
-        COALESCE(SUM(oi.cogs), 0.0) AS total_cogs,
-        (COALESCE(SUM(oi.net_revenue), 0.0) - COALESCE(SUM(r.refund_amount), 0.0) - COALESCE(SUM(oi.cogs), 0.0)) AS gross_profit
+        COALESCE(SUM(pi.gross_revenue), 0.0) AS gross_revenue,
+        COALESCE(SUM(pi.total_discounts), 0.0) AS total_discounts,
+        COALESCE(SUM(pr.total_refunds), 0.0) AS total_refunds,
+        (COALESCE(SUM(pi.net_revenue), 0.0) - COALESCE(SUM(pr.total_refunds), 0.0)) AS net_revenue,
+        COALESCE(SUM(pi.total_cogs), 0.0) AS total_cogs,
+        (COALESCE(SUM(pi.net_revenue), 0.0) - COALESCE(SUM(pr.total_refunds), 0.0) - COALESCE(SUM(pi.total_cogs), 0.0)) AS gross_profit
     FROM orders o
-    LEFT JOIN order_items oi ON o.id = oi.order_id
-    LEFT JOIN refunds r ON o.id = r.order_id
+    JOIN prev_items pi ON o.id = pi.order_id
+    LEFT JOIN prev_refunds pr ON o.id = pr.order_id
     WHERE o.order_date >= :prev_start_date AND o.order_date <= :prev_end_date
       AND (:region_id IS NULL OR o.region_id = :region_id)
-      AND (:category_id IS NULL OR oi.product_id IN (SELECT id FROM products WHERE category_id = :category_id))
 )
 SELECT 
     c.total_orders AS cur_orders,
@@ -58,39 +100,38 @@ FROM current_period c, previous_period p;
 
 # 2. Monthly Revenue Trend with Window Function Growth Calculation (LAG)
 MONTHLY_REVENUE_TREND_QUERY = """
-WITH monthly_data AS (
+WITH order_items_agg AS (
     SELECT
-        substr(o.order_date, 1, 7) AS month_period,
-        COUNT(DISTINCT o.id) AS orders_count,
+        oi.order_id,
         COALESCE(SUM(oi.gross_revenue), 0.0) AS gross_revenue,
         COALESCE(SUM(oi.discount_amount), 0.0) AS total_discounts,
         COALESCE(SUM(oi.net_revenue), 0.0) AS net_revenue_pre_refund,
         COALESCE(SUM(oi.cogs), 0.0) AS total_cogs
+    FROM order_items oi
+    GROUP BY oi.order_id
+),
+order_refunds_agg AS (
+    SELECT
+        r.order_id,
+        COALESCE(SUM(r.refund_amount), 0.0) AS total_refunds
+    FROM refunds r
+    GROUP BY r.order_id
+),
+monthly_data AS (
+    SELECT
+        substr(o.order_date, 1, 7) AS month_period,
+        COUNT(DISTINCT o.id) AS orders_count,
+        COALESCE(SUM(oi.gross_revenue), 0.0) AS gross_revenue,
+        COALESCE(SUM(oi.total_discounts), 0.0) AS total_discounts,
+        COALESCE(SUM(orf.total_refunds), 0.0) AS total_refunds,
+        (COALESCE(SUM(oi.net_revenue_pre_refund), 0.0) - COALESCE(SUM(orf.total_refunds), 0.0)) AS net_revenue,
+        (COALESCE(SUM(oi.net_revenue_pre_refund), 0.0) - COALESCE(SUM(orf.total_refunds), 0.0) - COALESCE(SUM(oi.total_cogs), 0.0)) AS net_profit
     FROM orders o
-    JOIN order_items oi ON o.id = oi.order_id
+    JOIN order_items_agg oi ON o.id = oi.order_id
+    LEFT JOIN order_refunds_agg orf ON o.id = orf.order_id
     WHERE o.order_date >= :start_date AND o.order_date <= :end_date
       AND (:region_id IS NULL OR o.region_id = :region_id)
     GROUP BY substr(o.order_date, 1, 7)
-),
-monthly_refunds AS (
-    SELECT
-        substr(r.refund_date, 1, 7) AS month_period,
-        COALESCE(SUM(r.refund_amount), 0.0) AS total_refunds
-    FROM refunds r
-    WHERE r.refund_date >= :start_date AND r.refund_date <= :end_date
-    GROUP BY substr(r.refund_date, 1, 7)
-),
-aggregated AS (
-    SELECT
-        m.month_period,
-        m.orders_count,
-        m.gross_revenue,
-        m.total_discounts,
-        COALESCE(rf.total_refunds, 0.0) AS total_refunds,
-        (m.net_revenue_pre_refund - COALESCE(rf.total_refunds, 0.0)) AS net_revenue,
-        (m.net_revenue_pre_refund - COALESCE(rf.total_refunds, 0.0) - m.total_cogs) AS net_profit
-    FROM monthly_data m
-    LEFT JOIN monthly_refunds rf ON m.month_period = rf.month_period
 )
 SELECT 
     month_period,
@@ -106,7 +147,7 @@ SELECT
         THEN ROUND(((net_revenue - LAG(net_revenue, 1) OVER (ORDER BY month_period ASC)) * 100.0 / LAG(net_revenue, 1) OVER (ORDER BY month_period ASC)), 2)
         ELSE 0.0
     END AS revenue_growth_rate
-FROM aggregated
+FROM monthly_data
 ORDER BY month_period ASC;
 """
 
@@ -129,8 +170,10 @@ WITH product_stats AS (
         (COALESCE(SUM(oi.net_revenue), 0.0) - COALESCE(SUM(r.refund_amount), 0.0) - COALESCE(SUM(oi.cogs), 0.0)) AS profit
     FROM products p
     JOIN categories c ON p.category_id = c.id
-    LEFT JOIN order_items oi ON p.id = oi.product_id
-    LEFT JOIN orders o ON oi.order_id = o.id AND o.order_date >= :start_date AND o.order_date <= :end_date
+    LEFT JOIN (
+        order_items oi 
+        JOIN orders o ON oi.order_id = o.id AND o.order_date >= :start_date AND o.order_date <= :end_date
+    ) ON p.id = oi.product_id
     LEFT JOIN refunds r ON oi.id = r.order_item_id
     WHERE (:category_id IS NULL OR p.category_id = :category_id)
     GROUP BY p.id, p.sku, p.name, c.name, p.unit_price, p.unit_cost
@@ -184,8 +227,10 @@ WITH category_metrics AS (
         COALESCE(SUM(r.refund_amount), 0.0) AS refund_amount
     FROM categories c
     JOIN products p ON c.id = p.category_id
-    LEFT JOIN order_items oi ON p.id = oi.product_id
-    LEFT JOIN orders o ON oi.order_id = o.id AND o.order_date >= :start_date AND o.order_date <= :end_date
+    LEFT JOIN (
+        order_items oi 
+        JOIN orders o ON oi.order_id = o.id AND o.order_date >= :start_date AND o.order_date <= :end_date
+    ) ON p.id = oi.product_id
     LEFT JOIN refunds r ON oi.id = r.order_item_id
     GROUP BY c.id, c.name
 ),
@@ -203,7 +248,11 @@ SELECT
     cm.refund_amount,
     (cm.net_revenue - cm.refund_amount) AS revenue,
     ((cm.net_revenue - cm.refund_amount) - cm.total_cogs) AS profit,
-    ROUND(((cm.net_revenue - cm.refund_amount) * 100.0 / t.total_company_revenue), 2) AS percentage,
+    CASE 
+        WHEN t.total_company_revenue > 0 
+        THEN ROUND(((cm.net_revenue - cm.refund_amount) * 100.0 / t.total_company_revenue), 2)
+        ELSE 0.0
+    END AS percentage,
     CASE 
         WHEN (cm.net_revenue - cm.refund_amount) > 0 
         THEN ROUND((((cm.net_revenue - cm.refund_amount) - cm.total_cogs) * 100.0 / (cm.net_revenue - cm.refund_amount)), 2)
@@ -230,9 +279,11 @@ WITH regional_stats AS (
         COALESCE(SUM(oi.cogs), 0.0) AS total_cogs,
         COALESCE(SUM(r.refund_amount), 0.0) AS refund_amount
     FROM regions rg
-    LEFT JOIN orders o ON rg.id = o.region_id AND o.order_date >= :start_date AND o.order_date <= :end_date
-    LEFT JOIN order_items oi ON o.id = oi.order_id
-    LEFT JOIN refunds r ON oi.id = r.order_item_id
+    LEFT JOIN (
+        orders o 
+        JOIN order_items oi ON o.id = oi.order_id
+        LEFT JOIN refunds r ON oi.id = r.order_item_id
+    ) ON rg.id = o.region_id AND o.order_date >= :start_date AND o.order_date <= :end_date
     GROUP BY rg.id, rg.name, rg.country, rg.state, rg.city, rg.code
 )
 SELECT 
@@ -279,9 +330,11 @@ WITH customer_orders AS (
         COALESCE(SUM(oi.cogs), 0.0) AS total_cogs,
         COALESCE(SUM(r.refund_amount), 0.0) AS refund_amount
     FROM customers c
-    LEFT JOIN orders o ON c.id = o.customer_id AND o.order_date >= :start_date AND o.order_date <= :end_date
-    LEFT JOIN order_items oi ON o.id = oi.order_id
-    LEFT JOIN refunds r ON oi.id = r.order_item_id
+    LEFT JOIN (
+        orders o
+        JOIN order_items oi ON o.id = oi.order_id
+        LEFT JOIN refunds r ON oi.id = r.order_item_id
+    ) ON c.id = o.customer_id AND o.order_date >= :start_date AND o.order_date <= :end_date
     GROUP BY c.id, c.segment
 )
 SELECT 
@@ -334,7 +387,8 @@ WITH refund_summary AS (
         ROUND(SUM(r.refund_amount), 2) AS total_amount,
         ROUND(AVG(r.refund_amount), 2) AS avg_amount
     FROM refunds r
-    WHERE r.refund_date >= :start_date AND r.refund_date <= :end_date
+    JOIN orders o ON r.order_id = o.id
+    WHERE o.order_date >= :start_date AND o.order_date <= :end_date
     GROUP BY r.refund_reason
 ),
 total_refunded AS (
@@ -346,7 +400,11 @@ SELECT
     rs.count,
     rs.total_amount,
     rs.avg_amount,
-    ROUND((rs.total_amount * 100.0 / tr.grand_total), 2) AS percentage
+    CASE 
+        WHEN tr.grand_total > 0 
+        THEN ROUND((rs.total_amount * 100.0 / tr.grand_total), 2)
+        ELSE 0.0
+    END AS percentage
 FROM refund_summary rs, total_refunded tr
 ORDER BY rs.total_amount DESC;
 """
@@ -376,4 +434,3 @@ GROUP BY o.id, o.order_number, o.order_date, c.name, c.segment, o.status, o.paym
 ORDER BY o.order_date DESC
 LIMIT :limit OFFSET :offset;
 """
-

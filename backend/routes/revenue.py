@@ -29,10 +29,11 @@ def get_revenue_trends(
     start_date: Optional[str] = Query(None),
     end_date: Optional[str] = Query(None),
     region_id: Optional[int] = Query(None),
+    grain: str = Query("monthly"),
     db: Session = Depends(get_db)
 ):
     engine = AnalyticsEngine(db)
-    return engine.get_monthly_revenue_trend(start_date, end_date, region_id)
+    return engine.get_monthly_revenue_trend(start_date, end_date, region_id, grain=grain)
 
 @router.get("/by-category")
 def get_revenue_by_category(
