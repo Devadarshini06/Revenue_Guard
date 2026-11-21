@@ -63,7 +63,22 @@ def get_sales_by_payment(
     ORDER BY total_amount DESC;
     """
     rows = db.execute(text(query), {"start_date": cur_start, "end_date": cur_end}).mappings().all()
-    return [dict(r) for r in rows]
+    total_sales = sum(float(r["total_amount"] or 0) for r in rows)
+
+    return [
+        {
+            "payment_method": r["payment_method"],
+            "name": r["payment_method"],
+            "orders_count": int(r["orders_count"] or 0),
+            "count": int(r["orders_count"] or 0),
+            "total_amount": round(float(r["total_amount"] or 0), 2),
+            "revenue": round(float(r["total_amount"] or 0), 2),
+            "value": round(float(r["total_amount"] or 0), 2),
+            "avg_amount": round(float(r["avg_amount"] or 0), 2),
+            "percentage": round(float(r["total_amount"] or 0) * 100.0 / total_sales, 2) if total_sales > 0 else 0.0
+        }
+        for r in rows
+    ]
 
 @router.get("/transactions")
 def get_sales_transactions(
