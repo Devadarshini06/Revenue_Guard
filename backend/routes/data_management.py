@@ -7,7 +7,9 @@ from sqlalchemy import text
 from backend.database import get_db
 from backend.models import DataUpload
 from backend.seed_data import seed_database
-from backend.security.sql_guard import validate_and_sanitize_sql, SQLSecurityException
+from backend.security.sql_guard import (
+    validate_and_sanitize_sql, SQLSecurityException, execute_read_only_sql
+)
 from backend.data_pipeline import (
     parse_upload_file, validate_dataframe, ingest_valid_records,
     IngestionError, MAX_FILE_SIZE, MAX_ROW_COUNT, ALLOWED_EXTENSIONS
@@ -171,19 +173,10 @@ def execute_custom_sql(
     if not isinstance(query, str) or not query.strip():
         raise HTTPException(status_code=400, detail="SQL query cannot be empty.")
 
-    try:
-        sanitized_query = validate_and_sanitize_sql(query)
-    except SQLSecurityException as se:
-        raise HTTPException(status_code=403, detail=str(se))
-
     start_time = time.time()
     try:
-        result = db.execute(text(sanitized_query)).mappings().all()
+        columns, rows = execute_read_only_sql(db, query, max_rows=1000)
         exec_time_ms = round((time.time() - start_time) * 1000, 2)
-
-        # Enforce maximum row limit of 1000 for query runner display
-        rows = [dict(r) for r in result[:1000]]
-        columns = list(rows[0].keys()) if rows else []
 
         return {
             "columns": columns,
@@ -191,10 +184,15 @@ def execute_custom_sql(
             "row_count": len(rows),
             "execution_time_ms": exec_time_ms
         }
+    except SQLSecurityException as se:
+        raise HTTPException(status_code=403, detail=str(se))
     except Exception as e:
-        # Sanitize exception message so internal filesystem paths or credentials are never exposed
         clean_error = str(e).split("\n")[0].strip()
-        # Remove SQLAlchemy boilerplate if present
+        if "not authorized" in clean_error.lower() or "prohibited" in clean_error.lower():
+            raise HTTPException(
+                status_code=403,
+                detail=f"Security violation: {clean_error}"
+            )
         if "[SQL:" in clean_error:
             clean_error = clean_error.split("[SQL:")[0].strip()
         raise HTTPException(status_code=400, detail=f"SQL Execution Error: {clean_error}")

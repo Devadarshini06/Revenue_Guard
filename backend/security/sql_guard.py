@@ -212,3 +212,72 @@ def validate_and_sanitize_sql(raw_query: str) -> str:
     final_query = cleaned.rstrip(';').strip()
     return final_query
 
+
+import sqlite3
+from sqlalchemy import text
+from sqlalchemy.orm import Session
+
+
+def sqlite_read_only_authorizer(action: int, arg1: Optional[str], arg2: Optional[str], db_name: Optional[str], trigger: Optional[str]) -> int:
+    """
+    Engine-level SQLite Authorizer callback.
+    Permits only SQLITE_SELECT, SQLITE_READ, and safe SQLITE_FUNCTION.
+    Blocks all mutations, administrative operations, extensions, and system catalogs.
+    """
+    # Allowed SQLite actions:
+    # 21 = SQLITE_SELECT, 20 = SQLITE_READ, 31 = SQLITE_FUNCTION
+    allowed_actions = {sqlite3.SQLITE_SELECT, sqlite3.SQLITE_READ, sqlite3.SQLITE_FUNCTION}
+    if action not in allowed_actions:
+        return sqlite3.SQLITE_DENY
+
+    if action == sqlite3.SQLITE_READ:
+        # Deny reading from internal SQLite system tables
+        if arg1 and arg1.lower() in (
+            "sqlite_master", "sqlite_schema", "sqlite_temp_master",
+            "sqlite_temp_schema", "sqlite_sequence", "sqlite_stat1",
+            "sqlite_stat2", "sqlite_stat3", "sqlite_stat4"
+        ):
+            return sqlite3.SQLITE_DENY
+
+    if action == sqlite3.SQLITE_FUNCTION:
+        # Deny dangerous SQLite functions (extension loading, external I/O)
+        if arg2 and arg2.lower() in ("load_extension", "readfile", "writefile", "edit"):
+            return sqlite3.SQLITE_DENY
+
+    return sqlite3.SQLITE_OK
+
+
+def execute_read_only_sql(db: Session, raw_query: str, max_rows: int = 1000) -> Tuple[List[str], List[dict]]:
+    """
+    Executes an analytical SQL query with dual defense-in-depth protection:
+      1. Pre-execution lexical tokenizer & AST validation.
+      2. SQLite engine-level authorizer directly bound to the DBAPI driver connection.
+    """
+    # Layer 1: Lexical analysis and sanitization
+    sanitized_query = validate_and_sanitize_sql(raw_query)
+
+    # Layer 2: Attach SQLite database-level authorizer
+    driver_conn = None
+    try:
+        conn = db.connection()
+        raw = getattr(conn.connection, "driver_connection", getattr(conn.connection, "dbapi_connection", None))
+        if isinstance(raw, sqlite3.Connection):
+            driver_conn = raw
+            driver_conn.set_authorizer(sqlite_read_only_authorizer)
+    except Exception:
+        pass
+
+    try:
+        result = db.execute(text(sanitized_query)).mappings().all()
+        rows = [dict(r) for r in result[:max_rows]]
+        columns = list(rows[0].keys()) if rows else []
+        return columns, rows
+    finally:
+        # Detach authorizer to prevent interfering with subsequent normal operations
+        if driver_conn is not None:
+            try:
+                driver_conn.set_authorizer(None)
+            except Exception:
+                pass
+
+
