@@ -134,3 +134,27 @@ class ASGITestClient:
 
     def post(self, path: str, params: Optional[Dict[str, Any]] = None, json: Optional[Any] = None, **kwargs) -> ASGIResponse:
         return self.request("POST", path, params=params, json_data=json, **kwargs)
+
+    def post_file(
+        self,
+        path: str,
+        filename: str,
+        file_bytes: bytes,
+        field_name: str = "file",
+        content_type: str = "text/csv",
+        params: Optional[Dict[str, Any]] = None
+    ) -> ASGIResponse:
+        boundary = "----RevenueGuardBoundary9876543210"
+        header_part = (
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="{field_name}"; filename="{filename}"\r\n'
+            f"Content-Type: {content_type}\r\n\r\n"
+        ).encode("utf-8")
+        footer_part = f"\r\n--{boundary}--\r\n".encode("utf-8")
+        body = header_part + file_bytes + footer_part
+
+        headers = {
+            "content-type": f"multipart/form-data; boundary={boundary}"
+        }
+        return self.request("POST", path, params=params, data=body, headers=headers)
+

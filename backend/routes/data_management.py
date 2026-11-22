@@ -1,99 +1,104 @@
-from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException
+import time
+from typing import Optional, Dict, Any, List
+from fastapi import APIRouter, Depends, UploadFile, File, Query, HTTPException, Body
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-from typing import Optional, Dict, Any, List
-import pandas as pd
-import numpy as np
-import io
-from datetime import datetime
+
 from backend.database import get_db
-from backend.models import DataUpload, Order, OrderItem, Product, Customer, Region, Category
+from backend.models import DataUpload
 from backend.seed_data import seed_database
+from backend.security.sql_guard import validate_and_sanitize_sql, SQLSecurityException
+from backend.data_pipeline import (
+    parse_upload_file, validate_dataframe, ingest_valid_records,
+    IngestionError, MAX_FILE_SIZE, MAX_ROW_COUNT, ALLOWED_EXTENSIONS
+)
 
 router = APIRouter(prefix="/data", tags=["Data Management"])
 
-REQUIRED_COLUMNS = [
-    "order_number", "order_date", "customer_code", "product_sku",
-    "quantity", "unit_price", "discount_amount"
-]
 
 @router.post("/validate")
-async def validate_dataset(file: UploadFile = File(...)):
-    """Pre-upload validation: checks schema, types, missing values, duplicates, and returns quality report."""
+async def validate_dataset(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db)
+):
+    """
+    Pre-upload validation: checks schema, MIME types, file size, foreign keys,
+    data types, missing values, duplicates, and returns a comprehensive quality report.
+    """
+    filename = file.filename or "uploaded_dataset.csv"
     contents = await file.read()
-    filename = file.filename or "uploaded_data.csv"
 
     try:
-        if filename.endswith(".csv"):
-            df = pd.read_csv(io.BytesIO(contents))
-        elif filename.endswith((".xls", ".xlsx")):
-            df = pd.read_excel(io.BytesIO(contents))
-        else:
-            raise HTTPException(status_code=400, detail="Unsupported file format. Please upload CSV or Excel.")
+        df = parse_upload_file(filename, contents, file.content_type)
+        report = validate_dataframe(df, db, filename)
+        return report
+    except IngestionError as ie:
+        raise HTTPException(status_code=ie.status_code, detail=ie.message)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Failed to parse file: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Failed to process file: {str(e)}")
 
-    total_rows = len(df)
-    missing_cols = [col for col in REQUIRED_COLUMNS if col not in df.columns]
-    
-    missing_counts = df.isnull().sum().to_dict()
-    missing_total = int(df.isnull().sum().sum())
-    duplicate_rows = int(df.duplicated().sum())
-
-    # Check for invalid rows (e.g. negative prices or negative quantities)
-    invalid_rows = 0
-    if "quantity" in df.columns:
-        invalid_rows += int((df["quantity"] <= 0).sum())
-    if "unit_price" in df.columns:
-        invalid_rows += int((df["unit_price"] <= 0).sum())
-
-    valid_rows = max(0, total_rows - duplicate_rows - invalid_rows)
-    
-    # Calculate Data Quality Score (0 - 100%)
-    penalty = (missing_total * 2 + duplicate_rows * 5 + invalid_rows * 10)
-    score = max(0.0, round(100.0 - (penalty / max(1, total_rows) * 10.0), 1))
-
-    preview_records = df.head(10).replace({np.nan: None}).to_dict(orient="records")
-
-    return {
-        "filename": filename,
-        "total_rows": total_rows,
-        "valid_rows": valid_rows,
-        "invalid_rows": invalid_rows,
-        "duplicate_rows": duplicate_rows,
-        "missing_columns": missing_cols,
-        "missing_values": {k: int(v) for k, v in missing_counts.items() if v > 0},
-        "column_types": {col: str(dtype) for col, dtype in df.dtypes.items()},
-        "quality_score": score,
-        "preview": preview_records
-    }
 
 @router.post("/upload")
 async def upload_and_import_dataset(
     file: UploadFile = File(...),
     db: Session = Depends(get_db)
 ):
-    """Parses, validates, and stores upload history metadata."""
-    validation = await validate_dataset(file)
+    """
+    Parses, validates, and atomically ingests valid records into the database.
+    Rolls back transaction on failure and records upload status in data_uploads.
+    """
+    filename = file.filename or "uploaded_dataset.csv"
+    contents = await file.read()
 
-    upload_record = DataUpload(
-        filename=validation["filename"],
-        rows_count=validation["total_rows"],
-        valid_rows=validation["valid_rows"],
-        invalid_rows=validation["invalid_rows"],
-        duplicate_rows=validation["duplicate_rows"],
-        status="Completed",
-        summary_notes=f"Data Quality Score: {validation['quality_score']}%. Validated {validation['valid_rows']} clean rows."
-    )
-    db.add(upload_record)
-    db.commit()
-    db.refresh(upload_record)
+    try:
+        df = parse_upload_file(filename, contents, file.content_type)
+        validation = validate_dataframe(df, db, filename)
 
-    return {
-        "success": True,
-        "upload_id": upload_record.id,
-        "summary": validation
-    }
+        if validation["valid_rows"] == 0 or validation["missing_columns"]:
+            err_msg = validation["errors"][0] if validation["errors"] else "No valid records found in dataset."
+            # Record failed upload in audit log
+            failed_upload = DataUpload(
+                filename=filename,
+                rows_count=validation["total_rows"],
+                valid_rows=0,
+                invalid_rows=validation["invalid_rows"],
+                duplicate_rows=validation["duplicate_rows"],
+                status="Failed",
+                summary_notes=f"Validation failed: {err_msg}"
+            )
+            db.add(failed_upload)
+            db.commit()
+            raise HTTPException(status_code=400, detail=f"Upload rejected: {err_msg}")
+
+        # Ingest valid records within an atomic database transaction
+        result = ingest_valid_records(df, validation["valid_indices"], db, filename)
+
+        return {
+            "success": True,
+            "upload_id": result["upload_id"],
+            "orders_ingested": result["orders_ingested"],
+            "items_ingested": result["items_ingested"],
+            "message": result["message"],
+            "summary": {
+                "filename": validation["filename"],
+                "total_rows": validation["total_rows"],
+                "valid_rows": validation["valid_rows"],
+                "invalid_rows": validation["invalid_rows"],
+                "duplicate_rows": validation["duplicate_rows"],
+                "missing_columns": validation["missing_columns"],
+                "missing_values": validation["missing_values"],
+                "column_types": validation["column_types"],
+                "quality_score": validation["quality_score"],
+                "preview": validation["preview"]
+            }
+        }
+    except IngestionError as ie:
+        raise HTTPException(status_code=ie.status_code, detail=ie.message)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal ingestion error: {str(e)}")
+
 
 @router.get("/history")
 def get_upload_history(db: Session = Depends(get_db)):
@@ -114,37 +119,82 @@ def get_upload_history(db: Session = Depends(get_db)):
         for u in uploads
     ]
 
+
 @router.post("/reseed-sample-data")
-def trigger_reseed(db: Session = Depends(get_db)):
-    """Allows one-click regenerating of the 5,200 synthetic enterprise orders."""
+def trigger_reseed(
+    confirm: bool = Query(False, description="Explicit confirmation required for destructive demonstration reset"),
+    payload: Optional[Dict[str, Any]] = Body(None),
+    db: Session = Depends(get_db)
+):
+    """
+    Safely regenerates the demonstration database.
+    Requires explicit confirmation via query parameter (?confirm=true) or JSON body ({'confirm': true})
+    to prevent accidental destruction of business records.
+    """
+    is_confirmed = confirm
+    if payload and isinstance(payload, dict):
+        if payload.get("confirm") is True or payload.get("confirm_reset") is True:
+            is_confirmed = True
+
+    if not is_confirmed:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Destructive operation rejected: Reseeding sample data requires "
+                "explicit confirmation parameter 'confirm=true'. This safeguards "
+                "existing user-uploaded records from accidental destruction."
+            )
+        )
+
+    # Authorized confirmed reseed
     seed_database(target_orders=5200, force_recreate=True)
-    return {"message": "Database reseeded successfully with 5,200 enterprise transactions."}
+    return {
+        "success": True,
+        "message": "Database reseeded successfully with 5,200 enterprise transactions."
+    }
+
 
 @router.post("/execute-sql")
 def execute_custom_sql(
-    payload: Dict[str, str],
+    payload: Dict[str, Any],
     db: Session = Depends(get_db)
 ):
-    """Executes analytical SQL queries from the UI Query Runner."""
-    query = payload.get("query", "").strip()
-    if not query:
+    """
+    Executes analytical SQL queries from the UI Query Runner.
+    Enforces strict read-only execution:
+      - Only SELECT and WITH/CTE queries are permitted.
+      - Multiple statements (stacked queries) are rejected.
+      - Modifying, administrative, and internal table accesses are blocked.
+      - Query execution time and max row limits are enforced.
+    """
+    query = payload.get("query", "") if isinstance(payload, dict) else ""
+    if not isinstance(query, str) or not query.strip():
         raise HTTPException(status_code=400, detail="SQL query cannot be empty.")
-    
-    # Read-only guard
-    low_q = query.lower()
-    for forbidden in ["drop", "delete", "truncate", "update", "insert", "alter"]:
-        if low_q.startswith(forbidden) or f" {forbidden} " in low_q:
-            raise HTTPException(status_code=403, detail="Only SELECT and WITH analytical queries are permitted.")
 
     try:
-        result = db.execute(text(query)).mappings().all()
-        rows = [dict(r) for r in result[:100]] # Limit to 100 rows for display
+        sanitized_query = validate_and_sanitize_sql(query)
+    except SQLSecurityException as se:
+        raise HTTPException(status_code=403, detail=str(se))
+
+    start_time = time.time()
+    try:
+        result = db.execute(text(sanitized_query)).mappings().all()
+        exec_time_ms = round((time.time() - start_time) * 1000, 2)
+
+        # Enforce maximum row limit of 1000 for query runner display
+        rows = [dict(r) for r in result[:1000]]
         columns = list(rows[0].keys()) if rows else []
+
         return {
             "columns": columns,
             "rows": rows,
-            "row_count": len(rows)
+            "row_count": len(rows),
+            "execution_time_ms": exec_time_ms
         }
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"SQL Execution Error: {str(e)}")
-
+        # Sanitize exception message so internal filesystem paths or credentials are never exposed
+        clean_error = str(e).split("\n")[0].strip()
+        # Remove SQLAlchemy boilerplate if present
+        if "[SQL:" in clean_error:
+            clean_error = clean_error.split("[SQL:")[0].strip()
+        raise HTTPException(status_code=400, detail=f"SQL Execution Error: {clean_error}")
