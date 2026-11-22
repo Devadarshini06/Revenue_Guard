@@ -211,3 +211,4 @@ def validate_and_sanitize_sql(raw_query: str) -> str:
     # 6. Return sanitized query without trailing semicolon
     final_query = cleaned.rstrip(';').strip()
     return final_query
+

@@ -399,3 +399,4 @@ def ingest_valid_records(df: pd.DataFrame, valid_indices: List[int], db: Session
             db.rollback()
 
         raise IngestionError(f"Database transaction rolled back. Ingestion error: {str(e)}", status_code=500)
+
