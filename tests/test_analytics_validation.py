@@ -169,7 +169,53 @@ class TestAnalyticsValidation(unittest.TestCase):
         sum_reasons_amt = sum(r["total_amount"] for r in refund_reasons)
         self.assertAlmostEqual(sum_reasons_amt, self.gt_refunds, places=2)
 
+    def test_10_trailing_twelve_months_baseline(self):
+        """
+        Validates that calling calculate_dashboard_kpis() without date parameters
+        resolves to the default trailing 12-month period (3,822 completed orders,
+        $28.48M gross, $25.90M net, $10.21M profit).
+        """
+        kpis = self.engine.calculate_dashboard_kpis()
+        self.assertEqual(int(kpis["total_orders"]["value"]), 3822)
+        self.assertAlmostEqual(kpis["total_revenue"]["value"], 28488467.00, places=2)
+        self.assertAlmostEqual(kpis["total_discounts"]["value"], 1670808.06, places=2)
+        self.assertAlmostEqual(kpis["total_refunds"]["value"], 917511.73, places=2)
+        self.assertAlmostEqual(kpis["net_revenue"]["value"], 25900147.21, places=2)
+        self.assertAlmostEqual(kpis["gross_profit"]["value"], 10210727.21, places=2)
+        self.assertAlmostEqual(kpis["profit_margin"]["value"], 39.42, places=1)
+        self.assertAlmostEqual(kpis["average_order_value"]["value"], 6776.60, places=1)
+
+    def test_11_time_window_partition_reconciliation(self):
+        """
+        Validates that the database contains 5,200 orders totaling $38,625,502.00
+        gross revenue (Milestone 1 All-Time baseline) and that the default trailing
+        12-month period (Milestone 4 baseline) accounts for $28,488,467.00 across
+        3,822 orders.
+        """
+        all_kpis = self.engine.calculate_dashboard_kpis(start_date="2020-01-01", end_date="2030-01-01")
+        t12_kpis = self.engine.calculate_dashboard_kpis()
+
+        # All-time baseline check (Milestone 1)
+        self.assertEqual(int(all_kpis["total_orders"]["value"]), 5200)
+        self.assertAlmostEqual(all_kpis["total_revenue"]["value"], 38625502.00, places=2)
+        self.assertAlmostEqual(all_kpis["net_revenue"]["value"], 35021057.61, places=2)
+        self.assertAlmostEqual(all_kpis["gross_profit"]["value"], 13882547.61, places=2)
+
+        # Trailing 12-month baseline check (Milestone 4)
+        self.assertEqual(int(t12_kpis["total_orders"]["value"]), 3822)
+        self.assertAlmostEqual(t12_kpis["total_revenue"]["value"], 28488467.00, places=2)
+        self.assertAlmostEqual(t12_kpis["net_revenue"]["value"], 25900147.21, places=2)
+        self.assertAlmostEqual(t12_kpis["gross_profit"]["value"], 10210727.21, places=2)
+
+        # Difference represents orders outside the trailing 12-month window
+        diff_orders = int(all_kpis["total_orders"]["value"] - t12_kpis["total_orders"]["value"])
+        diff_gross = all_kpis["total_revenue"]["value"] - t12_kpis["total_revenue"]["value"]
+        self.assertEqual(diff_orders, 1378)
+        self.assertAlmostEqual(diff_gross, 10137035.00, places=2)
+
+
 
 if __name__ == "__main__":
     unittest.main()
+
 
