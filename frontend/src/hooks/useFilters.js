@@ -7,7 +7,7 @@ export function useFilters(initialState = {}) {
     category_id: undefined,
     region_id: undefined,
     search: '',
-    datePreset: 'all',
+    datePreset: '12m',
     ...initialState
   });
 
@@ -20,7 +20,13 @@ export function useFilters(initialState = {}) {
     } else if (preset === '90d') {
       start.setDate(today.getDate() - 90);
     } else if (preset === '12m') {
-      start.setFullYear(today.getFullYear() - 1);
+      setFilters(prev => ({
+        ...prev,
+        start_date: '',
+        end_date: '',
+        datePreset: '12m'
+      }));
+      return;
     } else if (preset === 'all') {
       setFilters(prev => ({
         ...prev,

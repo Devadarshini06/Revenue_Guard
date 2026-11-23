@@ -65,7 +65,7 @@ export default function ReportsExports({ filters }) {
           Reports, Business Intelligence & Data Exports
         </h1>
         <p className="text-xs text-brand-gray mt-0.5">
-          Generate board-ready performance summaries and export Power BI-compliant relational datasets (Offline Mock Engine).
+          Generate board-ready performance summaries and export Power BI-compliant relational datasets (Live Database Engine).
         </p>
       </div>
 

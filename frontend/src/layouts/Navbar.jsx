@@ -56,7 +56,9 @@ export default function Navbar({
     } else if (preset === '90d') {
       start.setDate(today.getDate() - 90);
     } else if (preset === '12m') {
-      start.setFullYear(today.getFullYear() - 1);
+      setFilters(prev => ({ ...prev, start_date: '', end_date: '', datePreset: '12m' }));
+      setShowDatePicker(false);
+      return;
     } else if (preset === 'all') {
       setFilters(prev => ({ ...prev, start_date: '', end_date: '', datePreset: 'all' }));
       setShowDatePicker(false);
@@ -118,10 +120,12 @@ export default function Navbar({
                 : filters.datePreset === '90d'
                 ? 'Past 90 Days'
                 : filters.datePreset === '12m'
-                ? 'Past 12 Months'
+                ? 'Trailing 12 Months (Default)'
+                : filters.datePreset === 'all'
+                ? 'All Time Data (18 Months)'
                 : filters.start_date
                 ? `${filters.start_date} ~ ${filters.end_date || 'Now'}`
-                : 'All Time Data'}
+                : 'Trailing 12 Months (Default)'}
             </span>
             <span className="sm:hidden">Date</span>
           </button>
@@ -131,12 +135,20 @@ export default function Navbar({
               <div className="text-xs font-semibold text-brand-dark mb-2">Select Date Period</div>
               <div className="grid grid-cols-2 gap-1.5 mb-3">
                 <button
+                  onClick={() => handleDatePreset('12m')}
+                  className={`px-2.5 py-1.5 text-xs rounded-md text-left font-medium transition-colors ${
+                    filters.datePreset === '12m' ? 'bg-bronze text-white' : 'hover:bg-background text-brand-gray'
+                  }`}
+                >
+                  Trailing 12M (Default)
+                </button>
+                <button
                   onClick={() => handleDatePreset('all')}
                   className={`px-2.5 py-1.5 text-xs rounded-md text-left font-medium transition-colors ${
                     filters.datePreset === 'all' ? 'bg-bronze text-white' : 'hover:bg-background text-brand-gray'
                   }`}
                 >
-                  All Time Data
+                  All Time (18 Months)
                 </button>
                 <button
                   onClick={() => handleDatePreset('30d')}
@@ -153,14 +165,6 @@ export default function Navbar({
                   }`}
                 >
                   Past 90 Days
-                </button>
-                <button
-                  onClick={() => handleDatePreset('12m')}
-                  className={`px-2.5 py-1.5 text-xs rounded-md text-left font-medium transition-colors ${
-                    filters.datePreset === '12m' ? 'bg-bronze text-white' : 'hover:bg-background text-brand-gray'
-                  }`}
-                >
-                  Past 12 Months
                 </button>
               </div>
 
