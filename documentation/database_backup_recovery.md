@@ -112,3 +112,4 @@ pg_restore -c -h postgres-host -U rg_admin -d revenueguard_prod /var/backups/rg_
 - **Automated Verification**:
   - Validated by unit test `test_database_backup_and_restore_cycle_in_temp_db` in `tests/test_production_readiness.py`.
   - Monthly automated disaster recovery rehearsal restoring a snapshot into a staging environment and verifying exact row counts against production benchmarks.
+

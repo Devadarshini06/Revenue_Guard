@@ -283,3 +283,4 @@ If post-deployment smoke tests detect regressions:
 - [ ] Filter interactions (date ranges, category switches) execute without console errors.
 - [ ] CSV file export generates valid downloadable reports.
 - [ ] Request IDs appear in server access logs and HTTP response headers.
+

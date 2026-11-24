@@ -96,3 +96,4 @@ VITE_API_URL=/api
 2. Populate production environment file or inject via orchestrator secret manager (e.g. Kubernetes Secrets, AWS Secrets Manager).
 3. Ensure `ENVIRONMENT=production`, `DEBUG=false`, and `DOCS_ENABLED=false`.
 4. Restrict `ALLOWED_ORIGINS` to the exact enterprise domain name.
+

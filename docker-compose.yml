@@ -40,3 +40,4 @@ services:
 volumes:
   rg-data:
     name: revenueguard-database-volume
+

@@ -121,3 +121,4 @@ Four endpoints now provide observability:
 - [x] Business database (`revenueguard.db`) remains 100% intact with exactly 5,200 orders and 24,079 rows.
 - [x] Zero credentials, secrets, or internal paths committed.
 - [x] Critical blocker (Authentication/RBAC) clearly identified and documented.
+

@@ -108,3 +108,4 @@
 1. **Non-Root Execution**: Backend container runs strictly as unprivileged user `rguser` (UID 1001, GID 1001).
 2. **Network Segmentation**: In production, backend and database reside on private internal subnets without public ingress. Only the Nginx edge proxy is exposed to external traffic.
 3. **Storage Isolation**: Persistent data is mounted into `/app/data/` with restricted POSIX permissions (`chmod 700`).
+
