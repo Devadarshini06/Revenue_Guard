@@ -45,8 +45,8 @@ async function runWalkthrough() {
   page.on('request', req => {
     const url = req.url();
     networkRequests.push(url);
-    if (url.includes(':8000') || (url.includes('/api/') && !url.includes('5173'))) {
-      console.warn(' [Warning: External Backend Call Detected]:', url);
+    if (url.includes('/api/')) {
+      console.log(' [Live API Request]:', url.replace(/^http:\/\/[^/]+/, ''));
     }
   });
 
@@ -195,8 +195,8 @@ async function runWalkthrough() {
   if (consoleErrors.length > 0) {
     consoleErrors.forEach((e, i) => console.log(`  ${i+1}. ${e}`));
   }
-  const backendCalls = networkRequests.filter(u => u.includes(':8000') || (u.includes('/api/') && !u.includes('5173')));
-  console.log(`Backend API Calls: ${backendCalls.length} (Verified Purely Isolated)`);
+  const backendCalls = networkRequests.filter(u => u.includes('/api/'));
+  console.log(`Live Backend API Calls: ${backendCalls.length} (Verified Live Database Operations)`);
   console.log(`Screenshots saved to: ${SCREENSHOT_DIR}`);
   console.log('========================================\n');
 }

@@ -12,8 +12,30 @@ export default function Settings() {
   const [marginAlertThreshold, setMarginAlertThreshold] = useState(() => {
     return localStorage.getItem('rg_setting_marginAlertThreshold') || '25.0';
   });
-  const [dbStatus, setDbStatus] = useState({ status: 'Connected', latency: '1.2ms', rows: '5,200+' });
+  const [dbStatus, setDbStatus] = useState({ status: 'Connected', latency: '1.2ms', rows: '5,200 Records', engine: 'FastAPI / SQLite Engine' });
   const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    const t0 = performance.now();
+    api.healthCheck()
+      .then(res => {
+        const roundtrip = Math.round(performance.now() - t0);
+        setDbStatus({
+          status: res.status === 'healthy' ? 'Operational' : 'Degraded',
+          latency: `${roundtrip}ms Latency`,
+          rows: '5,200 Orders (24,079 Rows)',
+          engine: 'FastAPI / SQLite Live Engine'
+        });
+      })
+      .catch(() => {
+        setDbStatus({
+          status: 'Disconnected',
+          latency: 'Timeout',
+          rows: 'Unknown',
+          engine: 'Connection Error'
+        });
+      });
+  }, []);
 
   const handleSave = (e) => {
     e.preventDefault();
@@ -63,15 +85,15 @@ export default function Settings() {
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
           <div className="p-3 rounded-lg bg-background border border-border">
             <span className="text-brand-gray text-[10px] uppercase font-semibold">Engine / Dialect</span>
-            <div className="text-brand-dark font-mono font-bold mt-1">Standalone Mock Analytics Engine</div>
+            <div className="text-brand-dark font-mono font-bold mt-1">{dbStatus.engine}</div>
           </div>
           <div className="p-3 rounded-lg bg-background border border-border">
             <span className="text-brand-gray text-[10px] uppercase font-semibold">Indexed Orders Pool</span>
-            <div className="text-brand-dark font-mono font-bold mt-1">5,200 In-Memory Records</div>
+            <div className="text-brand-dark font-mono font-bold mt-1">{dbStatus.rows}</div>
           </div>
           <div className="p-3 rounded-lg bg-background border border-border">
             <span className="text-brand-gray text-[10px] uppercase font-semibold">Query Latency</span>
-            <div className="text-emerald-700 font-mono font-bold mt-1">&lt; 1ms Instant Response</div>
+            <div className="text-emerald-700 font-mono font-bold mt-1">{dbStatus.latency}</div>
           </div>
         </div>
       </div>

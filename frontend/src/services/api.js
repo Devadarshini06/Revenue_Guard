@@ -231,6 +231,7 @@ export const api = {
   getUploadHistory: () => get('/data/history'),
   reseedData: () => post('/data/reseed-sample-data?confirm=true', {}),
   executeSQL: (query) => post('/data/execute-sql', { query }),
+  healthCheck: () => get('/health'),
 };
 
 export default api;

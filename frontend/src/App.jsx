@@ -21,7 +21,7 @@ export default function App() {
   const [filterOptions, setFilterOptions] = useState(null);
   const { filters, setFilters } = useFilters();
 
-  // Load global filter bounds and categories from centralized mock service
+  // Load global filter bounds and categories from backend API
   useEffect(() => {
     api.getFilters()
       .then((opts) => setFilterOptions(opts))

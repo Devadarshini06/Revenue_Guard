@@ -110,12 +110,12 @@ export default function Sidebar({ activeTab, setActiveTab, isMobileOpen, setIsMo
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
                 <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
               </span>
-              <span className="text-[11px] font-medium text-[#E5E1DD]">Mock Engine Active</span>
+              <span className="text-[11px] font-medium text-[#E5E1DD]">Live Database Active</span>
             </div>
-            <span className="text-[10px] font-mono text-bronze uppercase">Isolated</span>
+            <span className="text-[10px] font-mono text-emerald-400 uppercase">Connected</span>
           </div>
           <div className="text-[10px] text-[#A09891] leading-relaxed">
-            Frontend running independently with centralized mock datasets.
+            Connected to FastAPI analytical engine & SQLite database.
           </div>
         </div>
       </aside>
