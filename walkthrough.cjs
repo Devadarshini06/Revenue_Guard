@@ -165,6 +165,17 @@ async function runWalkthrough() {
     }
   }
 
+  // Tablet viewport responsiveness check
+  console.log('\n[*] Testing Tablet Responsive Viewport (768x1024)...');
+  await page.setViewport({ width: 768, height: 1024 });
+  await page.evaluate(() => {
+    const buttons = Array.from(document.querySelectorAll('aside nav button'));
+    if (buttons[0]) buttons[0].click();
+  });
+  await new Promise(r => setTimeout(r, 600));
+  await page.screenshot({ path: path.join(SCREENSHOT_DIR, '15_Tablet_Overview.png') });
+  console.log('    ✓ Tablet responsive overview captured: 15_Tablet_Overview.png');
+
   // Mobile viewport responsiveness check
   console.log('\n[*] Testing Mobile Responsive Viewport (390x844)...');
   await page.setViewport({ width: 390, height: 844 });
