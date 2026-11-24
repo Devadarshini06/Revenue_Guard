@@ -151,7 +151,7 @@ All calculations match the approved enterprise baselines to the penny:
    - Multi-statement execution (`SELECT 1; SELECT 2`) is rejected.
 2. **File Ingestion Security**:
    - MIME type and file extension verification (permits only `.csv` and `.xlsx`).
-   - Maximum upload file size (15 MB) and maximum row count (50,000 rows) enforced.
+   - Maximum upload file size (10 MB) and maximum row count (50,000 rows) enforced.
    - Foreign key validation ensures referenced `customer_code` and `product_sku` exist before insertion.
    - Atomic transaction management: Any constraint failure triggers complete rollback (`db.rollback()`), preventing orphaned records.
 3. **Information Disclosure Prevention**:
@@ -295,3 +295,4 @@ RevenueGuard has completed end-to-end system validation with **zero outstanding 
 - [x] Repository clean and synchronized with GitHub.
 
 As required by protocol, Milestone 6 is complete, and execution is paused immediately to await user review and explicit approval before any subsequent milestone is started.
+

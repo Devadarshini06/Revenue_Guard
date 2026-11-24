@@ -122,6 +122,13 @@ export default function DataManagement() {
   const handleFileChange = async (e) => {
     const selected = e.target.files[0];
     if (!selected) return;
+
+    if (selected.size > 10 * 1024 * 1024) {
+      alert('File size exceeds the maximum allowed limit of 10MB.');
+      e.target.value = '';
+      return;
+    }
+
     setFile(selected);
     setValidating(true);
     setValidationReport(null);
@@ -230,7 +237,7 @@ export default function DataManagement() {
             {file ? file.name : 'Click to select CSV or Excel (.xlsx) file to validate'}
           </span>
           <span className="text-[11px] text-brand-gray mt-1">
-            Accepts UTF-8 CSV, XLS, XLSX formats up to 50MB
+            Accepts UTF-8 CSV, XLS, XLSX formats up to 10MB
           </span>
           <input
             type="file"
