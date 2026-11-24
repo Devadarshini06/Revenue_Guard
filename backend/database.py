@@ -2,17 +2,26 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.orm import declarative_base, sessionmaker
 from backend.config import settings
 
-connect_args = {}
+# Engine configuration tailored for production reliability
+engine_kwargs = {"pool_pre_ping": True}
+
 if settings.DATABASE_URL.startswith("sqlite"):
-    connect_args = {"check_same_thread": False}
+    engine_kwargs["connect_args"] = {
+        "check_same_thread": False,
+        "timeout": 30  # 30-second busy timeout for concurrent SQLite reads/writes
+    }
+else:
+    # Production connection pool settings for PostgreSQL
+    engine_kwargs.update({
+        "pool_size": 20,
+        "max_overflow": 10,
+        "pool_timeout": 30,
+        "pool_recycle": 1800,
+    })
 
-engine = create_engine(
-    settings.DATABASE_URL,
-    connect_args=connect_args,
-    pool_pre_ping=True
-)
+engine = create_engine(settings.DATABASE_URL, **engine_kwargs)
 
-# Enable foreign keys for SQLite
+# Enable foreign keys and Write-Ahead Logging (WAL) for SQLite
 if settings.DATABASE_URL.startswith("sqlite"):
     @event.listens_for(engine, "connect")
     def set_sqlite_pragma(dbapi_connection, connection_record):
@@ -30,4 +39,5 @@ def get_db():
         yield db
     finally:
         db.close()
+
 

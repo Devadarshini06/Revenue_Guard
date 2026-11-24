@@ -1,0 +1,54 @@
+# ==============================================================================
+# RevenueGuard Backend Production Dockerfile
+# Multi-stage, minimal, non-root container image for FastAPI ASGI Service
+# ==============================================================================
+
+FROM python:3.12-slim AS builder
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir --user -r requirements.txt
+
+
+# Final Runtime Stage
+FROM python:3.12-slim AS runner
+
+WORKDIR /app
+
+# Install runtime libraries for PostgreSQL and SQLite
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq5 \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create dedicated non-root application user
+RUN groupadd -r rguser && useradd -r -g rguser -u 1001 -m -d /home/rguser rguser
+
+# Copy installed python packages from builder
+COPY --from=builder /root/.local /home/rguser/.local
+ENV PATH=/home/rguser/.local/bin:$PATH
+ENV PYTHONUNBUFFERED=1
+ENV ENVIRONMENT=production
+
+# Copy application source code
+COPY backend ./backend
+COPY revenueguard.db ./revenueguard.db
+
+# Ensure correct permissions
+RUN chown -R rguser:rguser /app
+
+USER rguser
+
+EXPOSE 8000
+
+# Health check probe
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD curl -f http://localhost:8000/api/health/live || exit 1
+
+CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
