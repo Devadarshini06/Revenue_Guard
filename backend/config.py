@@ -42,10 +42,16 @@ class Settings:
         if raw_origins:
             origins = [o.strip() for o in raw_origins.split(",") if o.strip()]
             if self.ENVIRONMENT == "production":
-                # Wildcard CORS rejection in production
-                origins = [o for o in origins if o != "*"]
+                # Strict production validation: Wildcard '*' must fail clearly at startup
+                if "*" in origins:
+                    raise ValueError(
+                        "Insecure production configuration: Wildcard '*' in ALLOWED_ORIGINS is strictly prohibited in production mode. "
+                        "Specify explicit trusted origins (e.g. 'https://analytics.revenueguard.com')."
+                    )
                 if not origins:
-                    return ["http://localhost", "https://localhost"]
+                    raise ValueError(
+                        "Insecure production configuration: ALLOWED_ORIGINS contains no valid origins."
+                    )
             return origins
         
         # Development safe defaults

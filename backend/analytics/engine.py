@@ -21,7 +21,8 @@ from backend.analytics.sql_queries import (
     CUSTOMER_SEGMENTATION_QUERY,
     DISCOUNT_ANALYSIS_QUERY,
     REFUND_ANALYSIS_QUERY,
-    RECENT_TRANSACTIONS_QUERY
+    RECENT_TRANSACTIONS_QUERY,
+    get_query
 )
 from backend.models import Order, OrderItem, Product, Category, Region, Customer, Refund, Discount
 
@@ -33,6 +34,17 @@ class AnalyticsEngine:
 
     def __init__(self, db: Session):
         self.db = db
+
+    def _get_query(self, query_name: str) -> str:
+        """Resolves dialect-aware query string using active database connection bind."""
+        dialect = "sqlite"
+        try:
+            bind = self.db.get_bind()
+            if bind and hasattr(bind, "dialect") and hasattr(bind.dialect, "name"):
+                dialect = bind.dialect.name
+        except Exception:
+            pass
+        return get_query(query_name, dialect=dialect)
 
     def get_date_bounds(self, start_date: Optional[str] = None, end_date: Optional[str] = None):
         """Resolves date range and previous equivalent comparison period with end-of-day precision."""
@@ -165,7 +177,7 @@ class AnalyticsEngine:
         cur_start, cur_end, _, _ = self.get_date_bounds(start_date, end_date)
 
         rows = self.db.execute(
-            text(MONTHLY_REVENUE_TREND_QUERY),
+            text(self._get_query("MONTHLY_REVENUE_TREND_QUERY")),
             {
                 "start_date": cur_start,
                 "end_date": cur_end,
@@ -435,7 +447,7 @@ class AnalyticsEngine:
         search_param = f"%{search}%" if search else None
 
         rows = self.db.execute(
-            text(RECENT_TRANSACTIONS_QUERY),
+            text(self._get_query("RECENT_TRANSACTIONS_QUERY")),
             {"search": search_param, "limit": limit, "offset": offset}
         ).mappings().all()
 
