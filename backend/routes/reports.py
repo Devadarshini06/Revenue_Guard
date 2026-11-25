@@ -7,10 +7,12 @@ import io
 import pandas as pd
 from backend.database import get_db
 from backend.analytics.engine import AnalyticsEngine
+from backend.auth.dependencies import require_permission
+from backend.auth.rbac import Permission
 
 router = APIRouter(prefix="/reports", tags=["Reports & Exports"])
 
-@router.get("/summary")
+@router.get("/summary", dependencies=[Depends(require_permission(Permission.VIEW_ANALYTICS))])
 def get_executive_summary(
     start_date: Optional[str] = Query(None),
     end_date: Optional[str] = Query(None),
@@ -30,7 +32,7 @@ def get_executive_summary(
         "generated_at": pd.Timestamp.now().isoformat()
     }
 
-@router.get("/export/transactions/csv")
+@router.get("/export/transactions/csv", dependencies=[Depends(require_permission(Permission.EXPORT_REPORTS))])
 def export_transactions_csv(
     search: Optional[str] = Query(None),
     db: Session = Depends(get_db)
@@ -46,7 +48,7 @@ def export_transactions_csv(
     response.headers["Content-Disposition"] = "attachment; filename=revenueguard_transactions.csv"
     return response
 
-@router.get("/export/transactions/excel")
+@router.get("/export/transactions/excel", dependencies=[Depends(require_permission(Permission.EXPORT_REPORTS))])
 def export_transactions_excel(
     db: Session = Depends(get_db)
 ):
@@ -70,7 +72,7 @@ def export_transactions_excel(
     headers = {"Content-Disposition": "attachment; filename=revenueguard_full_bi_report.xlsx"}
     return StreamingResponse(output, headers=headers, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-@router.get("/power-bi/dataset")
+@router.get("/power-bi/dataset", dependencies=[Depends(require_permission(Permission.EXPORT_REPORTS))])
 def get_power_bi_dataset(db: Session = Depends(get_db)):
     """Power BI ready tabular dataset representation with dimensional attributes."""
     query = """

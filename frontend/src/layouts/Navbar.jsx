@@ -5,12 +5,18 @@ import {
   RefreshCw,
   Bell,
   Search,
-  User,
+  User as UserIcon,
   CheckCircle2,
   AlertCircle,
   Filter,
-  X
+  X,
+  LogOut,
+  KeyRound,
+  Shield,
+  ChevronDown
 } from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
+import ChangePasswordModal from '../components/auth/ChangePasswordModal';
 
 export default function Navbar({
   filters,
@@ -20,8 +26,20 @@ export default function Navbar({
   isRefreshing,
   setIsMobileOpen
 }) {
+  const { user, logout } = useAuth();
   const [showNotifications, setShowNotifications] = useState(false);
   const [showDatePicker, setShowDatePicker] = useState(false);
+  const [showUserMenu, setShowUserMenu] = useState(false);
+  const [showPasswordModal, setShowPasswordModal] = useState(false);
+
+  const userInitials = user?.full_name
+    ? user.full_name
+        .split(' ')
+        .map(n => n[0])
+        .slice(0, 2)
+        .join('')
+        .toUpperCase()
+    : 'RG';
 
   const notifications = [
     {
@@ -257,17 +275,67 @@ export default function Navbar({
           )}
         </div>
 
-        {/* User Profile */}
-        <div className="flex items-center gap-2 pl-1 border-l border-border/80">
-          <div className="w-8 h-8 rounded-full bg-bronze/20 border border-bronze/40 flex items-center justify-center text-bronze-dark font-bold text-xs">
-            JD
-          </div>
-          <div className="hidden xl:block text-left leading-tight">
-            <div className="text-xs font-semibold text-brand-dark">Julia Davies</div>
-            <div className="text-[10px] text-brand-gray">VP Revenue Ops</div>
-          </div>
+        {/* User Profile & Menu */}
+        <div className="relative pl-1 border-l border-border/80">
+          <button
+            onClick={() => setShowUserMenu(!showUserMenu)}
+            className="flex items-center gap-2 p-1 rounded-lg hover:bg-background transition-colors text-left cursor-pointer"
+          >
+            <div className="w-8 h-8 rounded-full bg-bronze/20 border border-bronze/40 flex items-center justify-center text-bronze-dark font-bold text-xs">
+              {userInitials}
+            </div>
+            <div className="hidden xl:block text-left leading-tight">
+              <div className="text-xs font-semibold text-brand-dark flex items-center gap-1.5">
+                <span>{user?.full_name || 'Revenue User'}</span>
+                <ChevronDown size={12} className="text-brand-gray" />
+              </div>
+              <div className="text-[10px] text-brand-gray flex items-center gap-1">
+                <span className="font-medium text-bronze">{user?.role || 'Viewer'}</span>
+              </div>
+            </div>
+          </button>
+
+          {showUserMenu && (
+            <div className="absolute right-0 mt-2 w-56 bg-card border border-border rounded-xl shadow-elevated p-2 z-50">
+              <div className="px-3 py-2 border-b border-border/80 mb-1">
+                <div className="text-xs font-bold text-brand-dark">{user?.full_name || 'Authenticated User'}</div>
+                <div className="text-[11px] text-brand-gray truncate">{user?.email || ''}</div>
+                <div className="mt-1.5 inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-bronze/10 text-bronze-dark border border-bronze/20">
+                  <Shield size={10} className="mr-1" />
+                  {user?.role || 'Viewer'}
+                </div>
+              </div>
+
+              <button
+                onClick={() => {
+                  setShowUserMenu(false);
+                  setShowPasswordModal(true);
+                }}
+                className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs text-brand-dark hover:bg-background transition-colors cursor-pointer"
+              >
+                <KeyRound size={14} className="text-brand-gray" />
+                <span>Change Password</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  setShowUserMenu(false);
+                  logout();
+                }}
+                className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+              >
+                <LogOut size={14} />
+                <span>Sign Out</span>
+              </button>
+            </div>
+          )}
         </div>
       </div>
+
+      <ChangePasswordModal
+        isOpen={showPasswordModal}
+        onClose={() => setShowPasswordModal(false)}
+      />
     </header>
   );
 }

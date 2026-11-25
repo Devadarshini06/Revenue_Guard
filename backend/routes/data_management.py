@@ -14,11 +14,13 @@ from backend.data_pipeline import (
     parse_upload_file, validate_dataframe, ingest_valid_records,
     IngestionError, MAX_FILE_SIZE, MAX_ROW_COUNT, ALLOWED_EXTENSIONS
 )
+from backend.auth.dependencies import require_permission
+from backend.auth.rbac import Permission
 
 router = APIRouter(prefix="/data", tags=["Data Management"])
 
 
-@router.post("/validate")
+@router.post("/validate", dependencies=[Depends(require_permission(Permission.MANAGE_DATA))])
 async def validate_dataset(
     file: UploadFile = File(...),
     db: Session = Depends(get_db)
@@ -40,7 +42,7 @@ async def validate_dataset(
         raise HTTPException(status_code=400, detail=f"Failed to process file: {str(e)}")
 
 
-@router.post("/upload")
+@router.post("/upload", dependencies=[Depends(require_permission(Permission.MANAGE_DATA))])
 async def upload_and_import_dataset(
     file: UploadFile = File(...),
     db: Session = Depends(get_db)
@@ -102,7 +104,7 @@ async def upload_and_import_dataset(
         raise HTTPException(status_code=500, detail=f"Internal ingestion error: {str(e)}")
 
 
-@router.get("/history")
+@router.get("/history", dependencies=[Depends(require_permission(Permission.VIEW_ANALYTICS))])
 def get_upload_history(db: Session = Depends(get_db)):
     """Retrieves dataset upload logs and historical processing statuses."""
     uploads = db.query(DataUpload).order_by(DataUpload.upload_date.desc()).all()
@@ -122,7 +124,7 @@ def get_upload_history(db: Session = Depends(get_db)):
     ]
 
 
-@router.post("/reseed-sample-data")
+@router.post("/reseed-sample-data", dependencies=[Depends(require_permission(Permission.MANAGE_SYSTEM))])
 def trigger_reseed(
     confirm: bool = Query(False, description="Explicit confirmation required for destructive demonstration reset"),
     payload: Optional[Dict[str, Any]] = Body(None),
@@ -156,7 +158,7 @@ def trigger_reseed(
     }
 
 
-@router.post("/execute-sql")
+@router.post("/execute-sql", dependencies=[Depends(require_permission(Permission.EXECUTE_SQL))])
 def execute_custom_sql(
     payload: Dict[str, Any],
     db: Session = Depends(get_db)

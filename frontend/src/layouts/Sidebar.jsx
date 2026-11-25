@@ -1,4 +1,5 @@
 import React from 'react';
+import { useAuth } from '../context/AuthContext';
 import {
   LayoutDashboard,
   TrendingUp,
@@ -32,6 +33,17 @@ export const NAV_ITEMS = [
 ];
 
 export default function Sidebar({ activeTab, setActiveTab, isMobileOpen, setIsMobileOpen }) {
+  const { user, hasPermission } = useAuth();
+
+  const filteredNavItems = NAV_ITEMS.filter((item) => {
+    if (item.id === 'data') {
+      return hasPermission('manage:data') || hasPermission('execute:sql');
+    }
+    if (item.id === 'settings') {
+      return user?.role === 'Super Admin' || user?.role === 'Admin';
+    }
+    return true;
+  });
   return (
     <>
       {/* Mobile Backdrop */}
@@ -67,7 +79,7 @@ export default function Sidebar({ activeTab, setActiveTab, isMobileOpen, setIsMo
             Platform Modules
           </div>
 
-          {NAV_ITEMS.map((item) => {
+          {filteredNavItems.map((item) => {
             const Icon = item.icon;
             const isActive = activeTab === item.id;
 

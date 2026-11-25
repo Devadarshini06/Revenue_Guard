@@ -4,8 +4,14 @@ from sqlalchemy import text
 from typing import Optional
 from backend.database import get_db
 from backend.analytics.engine import AnalyticsEngine
+from backend.auth.dependencies import require_permission
+from backend.auth.rbac import Permission
 
-router = APIRouter(prefix="/discounts", tags=["Discount Analysis"])
+router = APIRouter(
+    prefix="/discounts",
+    tags=["Discount Analysis"],
+    dependencies=[Depends(require_permission(Permission.VIEW_ANALYTICS))]
+)
 
 @router.get("/summary")
 def get_discount_summary(

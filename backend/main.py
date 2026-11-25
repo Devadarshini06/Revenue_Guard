@@ -20,7 +20,8 @@ from backend.routes import (
     customers,
     regional,
     reports,
-    data_management
+    data_management,
+    auth
 )
 
 # Configure structured application logger
@@ -97,6 +98,7 @@ app.include_router(customers.router, prefix=settings.API_PREFIX)
 app.include_router(regional.router, prefix=settings.API_PREFIX)
 app.include_router(reports.router, prefix=settings.API_PREFIX)
 app.include_router(data_management.router, prefix=settings.API_PREFIX)
+app.include_router(auth.router, prefix=settings.API_PREFIX, include_in_schema=False)
 
 @app.get("/")
 def root():

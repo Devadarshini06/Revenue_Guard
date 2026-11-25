@@ -3,8 +3,14 @@ from sqlalchemy.orm import Session
 from typing import Optional
 from backend.database import get_db
 from backend.analytics.engine import AnalyticsEngine
+from backend.auth.dependencies import require_permission
+from backend.auth.rbac import Permission
 
-router = APIRouter(prefix="/regional", tags=["Regional Analysis"])
+router = APIRouter(
+    prefix="/regional",
+    tags=["Regional Analysis"],
+    dependencies=[Depends(require_permission(Permission.VIEW_ANALYTICS))]
+)
 
 @router.get("/performance")
 def get_regional_performance(

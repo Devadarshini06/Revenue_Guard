@@ -5,8 +5,14 @@ from backend.database import get_db
 from backend.analytics.engine import AnalyticsEngine
 from backend.analytics.insights import InsightGenerator
 from backend.models import Category, Region, Order
+from backend.auth.dependencies import require_permission
+from backend.auth.rbac import Permission
 
-router = APIRouter(prefix="/overview", tags=["Overview"])
+router = APIRouter(
+    prefix="/overview",
+    tags=["Overview"],
+    dependencies=[Depends(require_permission(Permission.VIEW_ANALYTICS))]
+)
 
 @router.get("/filters")
 def get_filter_options(db: Session = Depends(get_db)):

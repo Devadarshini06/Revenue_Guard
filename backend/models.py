@@ -163,6 +163,36 @@ class DataUpload(Base):
     upload_date = Column(DateTime, default=datetime.utcnow)
     summary_notes = Column(Text, nullable=True)
 
+
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, index=True)
+    email = Column(String(255), unique=True, nullable=False, index=True)
+    hashed_password = Column(String(255), nullable=False)
+    full_name = Column(String(150), nullable=False)
+    role = Column(String(50), nullable=False, default="Viewer", index=True) # Super Admin, Admin, Analyst, Viewer
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    last_login = Column(DateTime, nullable=True)
+
+    refresh_tokens = relationship("RefreshToken", back_populates="user", cascade="all, delete-orphan")
+
+
+class RefreshToken(Base):
+    __tablename__ = "refresh_tokens"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    token_hash = Column(String(255), unique=True, nullable=False, index=True)
+    expires_at = Column(DateTime, nullable=False, index=True)
+    is_revoked = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    replaced_by = Column(String(255), nullable=True)
+
+    user = relationship("User", back_populates="refresh_tokens")
+
 # Add compound indexes for analytical querying performance
 Index("idx_orders_date_status", Order.order_date, Order.status)
 Index("idx_order_items_product_order", OrderItem.product_id, OrderItem.order_id)

@@ -23,8 +23,9 @@ class ASGITestClient:
     Lightweight, zero-external-dependency test client for ASGI / FastAPI apps.
     Directly invokes app(scope, receive, send) using asyncio.
     """
-    def __init__(self, app):
+    def __init__(self, app, default_auth: bool = True):
         self.app = app
+        self.default_auth = default_auth
 
     def request(
         self,
@@ -66,9 +67,27 @@ class ASGITestClient:
             b"host": b"testserver",
             b"user-agent": b"ASGITestClient/1.0"
         }
+        has_auth = False
         if headers:
             for k, v in headers.items():
-                req_headers[k.lower().encode("latin1")] = str(v).encode("latin1")
+                if k.lower() == "authorization":
+                    has_auth = True
+                    if v:
+                        req_headers[b"authorization"] = str(v).encode("latin1")
+                else:
+                    req_headers[k.lower().encode("latin1")] = str(v).encode("latin1")
+
+        if not has_auth and getattr(self, "default_auth", True):
+            try:
+                from backend.auth.tokens import create_access_token
+                test_token = create_access_token(
+                    user_id=1,
+                    email="admin@revenueguard.internal",
+                    role="Super Admin"
+                )
+                req_headers[b"authorization"] = f"Bearer {test_token}".encode("latin1")
+            except Exception:
+                pass
 
         if json_data is not None:
             body_bytes = json.dumps(json_data).encode("utf-8")
@@ -132,8 +151,17 @@ class ASGITestClient:
     def get(self, path: str, params: Optional[Dict[str, Any]] = None, **kwargs) -> ASGIResponse:
         return self.request("GET", path, params=params, **kwargs)
 
-    def post(self, path: str, params: Optional[Dict[str, Any]] = None, json: Optional[Any] = None, **kwargs) -> ASGIResponse:
-        return self.request("POST", path, params=params, json_data=json, **kwargs)
+    def post(self, path: str, params: Optional[Dict[str, Any]] = None, json: Optional[Any] = None, json_data: Optional[Any] = None, **kwargs) -> ASGIResponse:
+        payload = json if json is not None else json_data
+        return self.request("POST", path, params=params, json_data=payload, **kwargs)
+
+    def put(self, path: str, params: Optional[Dict[str, Any]] = None, json: Optional[Any] = None, json_data: Optional[Any] = None, **kwargs) -> ASGIResponse:
+        payload = json if json is not None else json_data
+        return self.request("PUT", path, params=params, json_data=payload, **kwargs)
+
+    def patch(self, path: str, params: Optional[Dict[str, Any]] = None, json: Optional[Any] = None, json_data: Optional[Any] = None, **kwargs) -> ASGIResponse:
+        payload = json if json is not None else json_data
+        return self.request("PATCH", path, params=params, json_data=payload, **kwargs)
 
     def post_file(
         self,
@@ -142,7 +170,9 @@ class ASGITestClient:
         file_bytes: bytes,
         field_name: str = "file",
         content_type: str = "text/csv",
-        params: Optional[Dict[str, Any]] = None
+        params: Optional[Dict[str, Any]] = None,
+        headers: Optional[Dict[str, str]] = None,
+        **kwargs
     ) -> ASGIResponse:
         boundary = "----RevenueGuardBoundary9876543210"
         header_part = (
@@ -153,8 +183,11 @@ class ASGITestClient:
         footer_part = f"\r\n--{boundary}--\r\n".encode("utf-8")
         body = header_part + file_bytes + footer_part
 
-        headers = {
+        req_headers = {
             "content-type": f"multipart/form-data; boundary={boundary}"
         }
-        return self.request("POST", path, params=params, data=body, headers=headers)
+        if headers:
+            req_headers.update(headers)
+        req_headers["content-type"] = f"multipart/form-data; boundary={boundary}"
+        return self.request("POST", path, params=params, data=body, headers=req_headers, **kwargs)
 

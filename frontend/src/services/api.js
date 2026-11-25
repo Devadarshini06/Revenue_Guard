@@ -1,9 +1,56 @@
 /**
  * RevenueGuard Centralized API Service Layer
  * Connects frontend modules directly to live FastAPI backend endpoints.
+ * Handles JWT access tokens, automatic silent refresh, and RBAC authorization headers.
  */
 
 const BASE_URL = (import.meta.env.VITE_API_URL || '/api').replace(/\/+$/, '');
+
+let isRefreshing = false;
+let refreshSubscribers = [];
+
+function subscribeTokenRefresh(cb) {
+  refreshSubscribers.push(cb);
+}
+
+function onRefreshed(token) {
+  refreshSubscribers.forEach((cb) => cb(token));
+  refreshSubscribers = [];
+}
+
+export function getStoredAccessToken() {
+  try {
+    return localStorage.getItem('rg_access_token');
+  } catch {
+    return null;
+  }
+}
+
+export function getStoredRefreshToken() {
+  try {
+    return localStorage.getItem('rg_refresh_token');
+  } catch {
+    return null;
+  }
+}
+
+export function setStoredTokens(accessToken, refreshToken) {
+  try {
+    if (accessToken) localStorage.setItem('rg_access_token', accessToken);
+    if (refreshToken) localStorage.setItem('rg_refresh_token', refreshToken);
+  } catch (e) {
+    console.warn('Storage write failed:', e);
+  }
+}
+
+export function clearStoredTokens() {
+  try {
+    localStorage.removeItem('rg_access_token');
+    localStorage.removeItem('rg_refresh_token');
+  } catch (e) {
+    console.warn('Storage removal failed:', e);
+  }
+}
 
 /**
  * Builds a clean query string from an object of parameters.
@@ -12,8 +59,6 @@ const BASE_URL = (import.meta.env.VITE_API_URL || '/api').replace(/\/+$/, '');
 function buildQueryString(params = {}) {
   const query = new URLSearchParams();
 
-  // If user selected 'All Time Data' preset and no custom start_date was provided,
-  // pass '2020-01-01' so backend queries the full historical database.
   if (params.datePreset === 'all' && !params.start_date) {
     query.append('start_date', '2020-01-01');
   } else if (params.start_date) {
@@ -61,16 +106,19 @@ function buildQueryString(params = {}) {
 }
 
 /**
- * Centralized fetch wrapper with timeout, JSON parsing, and unified error handling.
+ * Centralized fetch wrapper with timeout, JSON parsing, auth header injection,
+ * automatic token rotation on 401, and unified error handling.
  */
 async function request(endpoint, options = {}) {
   const url = `${BASE_URL}${endpoint}`;
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), options.timeout || 30000);
 
+  const token = getStoredAccessToken();
   const defaultHeaders = {
-    'Accept': 'application/json',
+    Accept: 'application/json',
     ...(options.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
     ...options.headers,
   };
 
@@ -83,7 +131,59 @@ async function request(endpoint, options = {}) {
 
     clearTimeout(timeoutId);
 
-    // Parse JSON response if present
+    // Silent refresh on 401 for authenticated sessions
+    if (
+      response.status === 401 &&
+      !options._retry &&
+      !endpoint.startsWith('/auth/login') &&
+      !endpoint.startsWith('/auth/refresh')
+    ) {
+      const refreshToken = getStoredRefreshToken();
+      if (refreshToken) {
+        if (!isRefreshing) {
+          isRefreshing = true;
+          try {
+            const refreshRes = await fetch(`${BASE_URL}/auth/refresh`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+              body: JSON.stringify({ refresh_token: refreshToken }),
+            });
+
+            if (refreshRes.ok) {
+              const newTokens = await refreshRes.json();
+              setStoredTokens(newTokens.access_token, newTokens.refresh_token);
+              isRefreshing = false;
+              onRefreshed(newTokens.access_token);
+              return request(endpoint, { ...options, _retry: true });
+            } else {
+              clearStoredTokens();
+              isRefreshing = false;
+              onRefreshed(null);
+              window.dispatchEvent(new CustomEvent('rg:auth:expired'));
+            }
+          } catch {
+            clearStoredTokens();
+            isRefreshing = false;
+            onRefreshed(null);
+            window.dispatchEvent(new CustomEvent('rg:auth:expired'));
+          }
+        } else {
+          return new Promise((resolve, reject) => {
+            subscribeTokenRefresh((newToken) => {
+              if (newToken) {
+                resolve(request(endpoint, { ...options, _retry: true }));
+              } else {
+                const err = new Error('Session expired');
+                err.status = 401;
+                reject(err);
+              }
+            });
+          });
+        }
+      }
+    }
+
+    // Parse response
     const contentType = response.headers.get('content-type') || '';
     let data = null;
     if (contentType.includes('application/json')) {
@@ -109,7 +209,6 @@ async function request(endpoint, options = {}) {
     if (err.name === 'AbortError') {
       throw new Error(`API request to ${endpoint} timed out after 30 seconds.`);
     }
-    // Retain original error message if already an Error with status
     if (err.status) {
       throw err;
     }
@@ -119,17 +218,23 @@ async function request(endpoint, options = {}) {
 
 // HTTP Helper verbs
 const get = (endpoint, params = {}) => request(`${endpoint}${buildQueryString(params)}`, { method: 'GET' });
-const post = (endpoint, body = {}) => request(endpoint, {
-  method: 'POST',
-  body: body instanceof FormData ? body : JSON.stringify(body)
-});
+const post = (endpoint, body = {}) =>
+  request(endpoint, {
+    method: 'POST',
+    body: body instanceof FormData ? body : JSON.stringify(body),
+  });
 
 /**
  * Downloads a file directly from a streaming backend endpoint.
  */
 async function downloadFile(endpoint, defaultFilename = 'export.csv', params = {}) {
+  const token = getStoredAccessToken();
   const url = `${BASE_URL}${endpoint}${buildQueryString(params)}`;
-  const response = await fetch(url);
+  const response = await fetch(url, {
+    headers: {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+  });
   if (!response.ok) {
     throw new Error(`Failed to download report: ${response.statusText}`);
   }
@@ -138,14 +243,13 @@ async function downloadFile(endpoint, defaultFilename = 'export.csv', params = {
   const downloadUrl = window.URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = downloadUrl;
-  
-  // Extract filename from Content-Disposition header if available
+
   const disposition = response.headers.get('content-disposition');
   let filename = defaultFilename;
   if (disposition && disposition.includes('filename=')) {
     filename = disposition.split('filename=')[1].replace(/["']/g, '').trim();
   }
-  
+
   a.download = filename;
   document.body.appendChild(a);
   a.click();
@@ -154,9 +258,33 @@ async function downloadFile(endpoint, defaultFilename = 'export.csv', params = {
 }
 
 /**
- * Centralized API client exporting all 33+ service methods.
+ * Centralized API client exporting all service methods.
  */
 export const api = {
+  // Authentication & RBAC
+  login: (email, password) => post('/auth/login', { email, password }),
+  logout: (refreshToken) => post('/auth/logout', { refresh_token: refreshToken }),
+  refresh: (refreshToken) => post('/auth/refresh', { refresh_token: refreshToken }),
+  getMe: () => get('/auth/me'),
+  getPermissions: () => get('/auth/permissions'),
+  changePassword: (currentPassword, newPassword) =>
+    post('/auth/change-password', {
+      current_password: currentPassword,
+      new_password: newPassword,
+    }),
+  getUsers: () => get('/auth/users'),
+  createUser: (userData) => post('/auth/users', userData),
+  updateUserStatus: (userId, isActive) =>
+    request(`/auth/users/${userId}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ is_active: isActive }),
+    }),
+  updateUserRole: (userId, role) =>
+    request(`/auth/users/${userId}/role`, {
+      method: 'PUT',
+      body: JSON.stringify({ role }),
+    }),
+
   // Filters & Lookups
   getFilters: (params) => get('/overview/filters', params),
 
@@ -213,8 +341,10 @@ export const api = {
 
   // 10. Reports & Exports Module
   getExecutiveReport: (params) => get('/reports/summary', params),
-  exportTransactionsCSV: (params) => downloadFile('/reports/export/transactions/csv', 'revenueguard_transactions.csv', params),
-  exportTransactionsExcel: (params) => downloadFile('/reports/export/transactions/excel', 'revenueguard_full_bi_report.xlsx', params),
+  exportTransactionsCSV: (params) =>
+    downloadFile('/reports/export/transactions/csv', 'revenueguard_transactions.csv', params),
+  exportTransactionsExcel: (params) =>
+    downloadFile('/reports/export/transactions/excel', 'revenueguard_full_bi_report.xlsx', params),
   getPowerBIDataset: (params) => get('/reports/power-bi/dataset', params),
 
   // 11. Data Management Module

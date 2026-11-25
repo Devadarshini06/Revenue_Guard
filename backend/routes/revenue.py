@@ -3,8 +3,14 @@ from sqlalchemy.orm import Session
 from typing import Optional
 from backend.database import get_db
 from backend.analytics.engine import AnalyticsEngine
+from backend.auth.dependencies import require_permission
+from backend.auth.rbac import Permission
 
-router = APIRouter(prefix="/revenue", tags=["Revenue Analytics"])
+router = APIRouter(
+    prefix="/revenue",
+    tags=["Revenue Analytics"],
+    dependencies=[Depends(require_permission(Permission.VIEW_ANALYTICS))]
+)
 
 @router.get("/summary")
 def get_revenue_summary(
