@@ -59,3 +59,4 @@ def validate_password_strength(password: str) -> Tuple[bool, List[str]]:
         errors.append("Password must contain at least one special character (!@#$%^&*...).")
 
     return (len(errors) == 0, errors)
+

@@ -1,11 +1,14 @@
 /**
  * RevenueGuard Centralized API Service Layer
  * Connects frontend modules directly to live FastAPI backend endpoints.
- * Handles JWT access tokens, automatic silent refresh, and RBAC authorization headers.
+ * Implements In-Memory JWT Access Tokens and Secure HttpOnly SameSite Refresh Cookies.
+ * Enforces Anti-CSRF protection via custom request headers.
  */
 
 const BASE_URL = (import.meta.env.VITE_API_URL || '/api').replace(/\/+$/, '');
 
+// In-Memory Token Management (Strictly zero persistent browser storage of sensitive tokens)
+let inMemoryAccessToken = null;
 let isRefreshing = false;
 let refreshSubscribers = [];
 
@@ -18,39 +21,21 @@ function onRefreshed(token) {
   refreshSubscribers = [];
 }
 
-export function getStoredAccessToken() {
-  try {
-    return localStorage.getItem('rg_access_token');
-  } catch {
-    return null;
-  }
+export function getAccessToken() {
+  return inMemoryAccessToken;
 }
 
-export function getStoredRefreshToken() {
-  try {
-    return localStorage.getItem('rg_refresh_token');
-  } catch {
-    return null;
-  }
+export function setAccessToken(token) {
+  inMemoryAccessToken = token;
 }
 
-export function setStoredTokens(accessToken, refreshToken) {
-  try {
-    if (accessToken) localStorage.setItem('rg_access_token', accessToken);
-    if (refreshToken) localStorage.setItem('rg_refresh_token', refreshToken);
-  } catch (e) {
-    console.warn('Storage write failed:', e);
-  }
+export function clearAccessToken() {
+  inMemoryAccessToken = null;
 }
 
-export function clearStoredTokens() {
-  try {
-    localStorage.removeItem('rg_access_token');
-    localStorage.removeItem('rg_refresh_token');
-  } catch (e) {
-    console.warn('Storage removal failed:', e);
-  }
-}
+// Backward compatibility alias functions
+export const getStoredAccessToken = getAccessToken;
+export const clearStoredTokens = clearAccessToken;
 
 /**
  * Builds a clean query string from an object of parameters.
@@ -114,72 +99,75 @@ async function request(endpoint, options = {}) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), options.timeout || 30000);
 
-  const token = getStoredAccessToken();
   const defaultHeaders = {
     Accept: 'application/json',
+    'X-Requested-With': 'XMLHttpRequest', // Anti-CSRF protection
     ...(options.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(inMemoryAccessToken ? { Authorization: `Bearer ${inMemoryAccessToken}` } : {}),
     ...options.headers,
   };
 
   try {
     const response = await fetch(url, {
       ...options,
+      credentials: 'include', // Transmit HttpOnly SameSite cookies automatically
       headers: defaultHeaders,
       signal: controller.signal,
     });
 
     clearTimeout(timeoutId);
 
-    // Silent refresh on 401 for authenticated sessions
+    // Silent refresh on 401 using secure HttpOnly refresh cookie
     if (
       response.status === 401 &&
       !options._retry &&
       !endpoint.startsWith('/auth/login') &&
       !endpoint.startsWith('/auth/refresh')
     ) {
-      const refreshToken = getStoredRefreshToken();
-      if (refreshToken) {
-        if (!isRefreshing) {
-          isRefreshing = true;
-          try {
-            const refreshRes = await fetch(`${BASE_URL}/auth/refresh`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-              body: JSON.stringify({ refresh_token: refreshToken }),
-            });
+      if (!isRefreshing) {
+        isRefreshing = true;
+        try {
+          const refreshRes = await fetch(`${BASE_URL}/auth/refresh`, {
+            method: 'POST',
+            credentials: 'include',
+            headers: {
+              'Content-Type': 'application/json',
+              Accept: 'application/json',
+              'X-Requested-With': 'XMLHttpRequest',
+            },
+            body: JSON.stringify({}),
+          });
 
-            if (refreshRes.ok) {
-              const newTokens = await refreshRes.json();
-              setStoredTokens(newTokens.access_token, newTokens.refresh_token);
-              isRefreshing = false;
-              onRefreshed(newTokens.access_token);
-              return request(endpoint, { ...options, _retry: true });
-            } else {
-              clearStoredTokens();
-              isRefreshing = false;
-              onRefreshed(null);
-              window.dispatchEvent(new CustomEvent('rg:auth:expired'));
-            }
-          } catch {
-            clearStoredTokens();
+          if (refreshRes.ok) {
+            const newTokens = await refreshRes.json();
+            setAccessToken(newTokens.access_token);
+            isRefreshing = false;
+            onRefreshed(newTokens.access_token);
+            return request(endpoint, { ...options, _retry: true });
+          } else {
+            clearAccessToken();
             isRefreshing = false;
             onRefreshed(null);
             window.dispatchEvent(new CustomEvent('rg:auth:expired'));
           }
-        } else {
-          return new Promise((resolve, reject) => {
-            subscribeTokenRefresh((newToken) => {
-              if (newToken) {
-                resolve(request(endpoint, { ...options, _retry: true }));
-              } else {
-                const err = new Error('Session expired');
-                err.status = 401;
-                reject(err);
-              }
-            });
-          });
+        } catch {
+          clearAccessToken();
+          isRefreshing = false;
+          onRefreshed(null);
+          window.dispatchEvent(new CustomEvent('rg:auth:expired'));
         }
+      } else {
+        return new Promise((resolve, reject) => {
+          subscribeTokenRefresh((newToken) => {
+            if (newToken) {
+              resolve(request(endpoint, { ...options, _retry: true }));
+            } else {
+              const err = new Error('Session expired');
+              err.status = 401;
+              reject(err);
+            }
+          });
+        });
       }
     }
 
@@ -228,11 +216,12 @@ const post = (endpoint, body = {}) =>
  * Downloads a file directly from a streaming backend endpoint.
  */
 async function downloadFile(endpoint, defaultFilename = 'export.csv', params = {}) {
-  const token = getStoredAccessToken();
   const url = `${BASE_URL}${endpoint}${buildQueryString(params)}`;
   const response = await fetch(url, {
+    credentials: 'include',
     headers: {
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      'X-Requested-With': 'XMLHttpRequest',
+      ...(inMemoryAccessToken ? { Authorization: `Bearer ${inMemoryAccessToken}` } : {}),
     },
   });
   if (!response.ok) {
@@ -263,10 +252,11 @@ async function downloadFile(endpoint, defaultFilename = 'export.csv', params = {
 export const api = {
   // Authentication & RBAC
   login: (email, password) => post('/auth/login', { email, password }),
-  logout: (refreshToken) => post('/auth/logout', { refresh_token: refreshToken }),
-  refresh: (refreshToken) => post('/auth/refresh', { refresh_token: refreshToken }),
+  logout: (refreshToken) => post('/auth/logout', refreshToken ? { refresh_token: refreshToken } : {}),
+  refresh: (refreshToken) => post('/auth/refresh', refreshToken ? { refresh_token: refreshToken } : {}),
   getMe: () => get('/auth/me'),
   getPermissions: () => get('/auth/permissions'),
+  getAuditLogs: (limit = 50) => get(`/auth/audit-logs?limit=${limit}`),
   changePassword: (currentPassword, newPassword) =>
     post('/auth/change-password', {
       current_password: currentPassword,
@@ -276,7 +266,7 @@ export const api = {
   createUser: (userData) => post('/auth/users', userData),
   updateUserStatus: (userId, isActive) =>
     request(`/auth/users/${userId}/status`, {
-      method: 'PATCH',
+      method: 'PUT',
       body: JSON.stringify({ is_active: isActive }),
     }),
   updateUserRole: (userId, role) =>

@@ -28,12 +28,6 @@ export default function Login() {
     }
   };
 
-  const handleQuickFill = (demoEmail, demoPass) => {
-    setEmail(demoEmail);
-    setPassword(demoPass);
-    setErrorMessage('');
-  };
-
   return (
     <div className="min-h-screen bg-[#231F1D] flex flex-col justify-center items-center px-4 sm:px-6 lg:px-8 relative overflow-hidden select-none">
       {/* Background ambient lighting */}
@@ -137,40 +131,6 @@ export default function Login() {
               )}
             </button>
           </form>
-
-          {/* Demonstration Quick Fill Bar */}
-          <div className="mt-6 pt-5 border-t border-[#3D3633]">
-            <div className="text-[11px] font-semibold text-[#A09891] uppercase tracking-wider mb-2 flex items-center justify-between">
-              <span>Quick Login Credentials</span>
-              <span className="text-[10px] text-[#C5A880] lowercase">click to fill</span>
-            </div>
-            <div className="grid grid-cols-3 gap-2">
-              <button
-                type="button"
-                onClick={() => handleQuickFill('superadmin@revenueguard.io', 'SuperAdmin2026!')}
-                className="px-2 py-1.5 rounded bg-[#1F1B19] hover:bg-[#3A3431] border border-[#3D3633] text-[11px] text-[#E5E1DD] text-center transition-colors cursor-pointer"
-              >
-                <div className="font-semibold text-[#C5A880]">Super Admin</div>
-                <div className="text-[9px] text-[#A09891] truncate">All Modules</div>
-              </button>
-              <button
-                type="button"
-                onClick={() => handleQuickFill('analyst@revenueguard.io', 'Analyst2026!')}
-                className="px-2 py-1.5 rounded bg-[#1F1B19] hover:bg-[#3A3431] border border-[#3D3633] text-[11px] text-[#E5E1DD] text-center transition-colors cursor-pointer"
-              >
-                <div className="font-semibold text-blue-300">Analyst</div>
-                <div className="text-[9px] text-[#A09891] truncate">Analytics & SQL</div>
-              </button>
-              <button
-                type="button"
-                onClick={() => handleQuickFill('viewer@revenueguard.io', 'Viewer2026!')}
-                className="px-2 py-1.5 rounded bg-[#1F1B19] hover:bg-[#3A3431] border border-[#3D3633] text-[11px] text-[#E5E1DD] text-center transition-colors cursor-pointer"
-              >
-                <div className="font-semibold text-emerald-300">Viewer</div>
-                <div className="text-[9px] text-[#A09891] truncate">Read Only</div>
-              </button>
-            </div>
-          </div>
         </div>
 
         {/* Security Compliance Footer */}
@@ -186,3 +146,4 @@ export default function Login() {
     </div>
   );
 }
+

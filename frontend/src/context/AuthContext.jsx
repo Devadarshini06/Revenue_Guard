@@ -1,10 +1,9 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import {
   api,
-  getStoredAccessToken,
-  getStoredRefreshToken,
-  setStoredTokens,
-  clearStoredTokens,
+  getAccessToken,
+  setAccessToken,
+  clearAccessToken,
 } from '../services/api';
 
 const AuthContext = createContext(null);
@@ -14,27 +13,25 @@ export function AuthProvider({ children }) {
   const [permissions, setPermissions] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
 
-  const fetchCurrentUser = useCallback(async () => {
-    const token = getStoredAccessToken();
-    if (!token) {
-      setUser(null);
-      setPermissions([]);
-      setIsLoading(false);
-      return;
-    }
-
+  // Initialize session by checking for an active HttpOnly cookie via silent refresh
+  const initializeSession = useCallback(async () => {
     try {
-      const [meRes, permsRes] = await Promise.all([
-        api.getMe(),
-        api.getPermissions(),
-      ]);
-
-      setUser(meRes.user);
-      setPermissions(permsRes.permissions || []);
-    } catch (err) {
-      console.warn('Authentication verification failed:', err.message);
-      // If verification fails, clear stored tokens and reset user
-      clearStoredTokens();
+      const refreshData = await api.refresh();
+      if (refreshData && refreshData.access_token) {
+        setAccessToken(refreshData.access_token);
+        const [meRes, permsRes] = await Promise.all([
+          api.getMe(),
+          api.getPermissions(),
+        ]);
+        setUser(meRes.user || meRes);
+        setPermissions(permsRes.permissions || []);
+      } else {
+        clearAccessToken();
+        setUser(null);
+        setPermissions([]);
+      }
+    } catch {
+      clearAccessToken();
       setUser(null);
       setPermissions([]);
     } finally {
@@ -43,24 +40,24 @@ export function AuthProvider({ children }) {
   }, []);
 
   useEffect(() => {
-    fetchCurrentUser();
+    initializeSession();
 
     // Listen for global auth expiration events from API interceptor
     const handleExpired = () => {
+      clearAccessToken();
       setUser(null);
       setPermissions([]);
-      clearStoredTokens();
     };
 
     window.addEventListener('rg:auth:expired', handleExpired);
     return () => window.removeEventListener('rg:auth:expired', handleExpired);
-  }, [fetchCurrentUser]);
+  }, [initializeSession]);
 
   const login = async (email, password) => {
     setIsLoading(true);
     try {
       const data = await api.login(email, password);
-      setStoredTokens(data.access_token, data.refresh_token);
+      setAccessToken(data.access_token);
       setUser(data.user);
 
       // Fetch user's assigned RBAC permissions
@@ -73,15 +70,12 @@ export function AuthProvider({ children }) {
   };
 
   const logout = async () => {
-    const refreshToken = getStoredRefreshToken();
     try {
-      if (refreshToken) {
-        await api.logout(refreshToken);
-      }
+      await api.logout();
     } catch (err) {
-      console.warn('Server logout notice failed:', err.message);
+      console.warn('Server logout notice error:', err.message);
     } finally {
-      clearStoredTokens();
+      clearAccessToken();
       setUser(null);
       setPermissions([]);
     }
@@ -106,7 +100,7 @@ export function AuthProvider({ children }) {
     logout,
     changePassword,
     hasPermission,
-    refreshSession: fetchCurrentUser,
+    refreshSession: initializeSession,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

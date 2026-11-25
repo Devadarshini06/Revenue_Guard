@@ -64,3 +64,4 @@ def get_role_permissions(role: str) -> List[str]:
     """Returns sorted list of permission keys for a given role."""
     perms = ROLE_PERMISSIONS.get(role, set())
     return sorted([p.value for p in perms])
+

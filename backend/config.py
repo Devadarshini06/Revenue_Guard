@@ -14,6 +14,10 @@ class Settings:
         return self._env.get("ENVIRONMENT", "development").lower()
     
     @property
+    def is_production(self) -> bool:
+        return self.ENVIRONMENT == "production"
+    
+    @property
     def DEBUG(self) -> bool:
         # Debug mode is strictly disabled in production
         if self.ENVIRONMENT == "production":

@@ -14,8 +14,10 @@ from backend.data_pipeline import (
     parse_upload_file, validate_dataframe, ingest_valid_records,
     IngestionError, MAX_FILE_SIZE, MAX_ROW_COUNT, ALLOWED_EXTENSIONS
 )
-from backend.auth.dependencies import require_permission
+from backend.auth.dependencies import require_permission, get_current_user
 from backend.auth.rbac import Permission
+from backend.auth.audit import log_audit_event, AuditEvent
+from backend.models import User
 
 router = APIRouter(prefix="/data", tags=["Data Management"])
 
@@ -45,6 +47,7 @@ async def validate_dataset(
 @router.post("/upload", dependencies=[Depends(require_permission(Permission.MANAGE_DATA))])
 async def upload_and_import_dataset(
     file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
@@ -76,6 +79,19 @@ async def upload_and_import_dataset(
 
         # Ingest valid records within an atomic database transaction
         result = ingest_valid_records(df, validation["valid_indices"], db, filename)
+
+        log_audit_event(
+            AuditEvent.PRIVILEGED_DATA_OPERATION,
+            actor_id=current_user.id,
+            actor_email=current_user.email,
+            action="DATA_UPLOAD",
+            status="SUCCESS",
+            details={
+                "filename": filename,
+                "orders_ingested": result.get("orders_ingested", 0),
+                "items_ingested": result.get("items_ingested", 0)
+            }
+        )
 
         return {
             "success": True,
@@ -128,6 +144,7 @@ def get_upload_history(db: Session = Depends(get_db)):
 def trigger_reseed(
     confirm: bool = Query(False, description="Explicit confirmation required for destructive demonstration reset"),
     payload: Optional[Dict[str, Any]] = Body(None),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
@@ -152,6 +169,16 @@ def trigger_reseed(
 
     # Authorized confirmed reseed
     seed_database(target_orders=5200, force_recreate=True)
+
+    log_audit_event(
+        AuditEvent.PRIVILEGED_DATA_OPERATION,
+        actor_id=current_user.id,
+        actor_email=current_user.email,
+        action="SYSTEM_RESEED",
+        status="SUCCESS",
+        details={"target_orders": 5200}
+    )
+
     return {
         "success": True,
         "message": "Database reseeded successfully with 5,200 enterprise transactions."
@@ -161,6 +188,7 @@ def trigger_reseed(
 @router.post("/execute-sql", dependencies=[Depends(require_permission(Permission.EXECUTE_SQL))])
 def execute_custom_sql(
     payload: Dict[str, Any],
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
@@ -179,6 +207,19 @@ def execute_custom_sql(
     try:
         columns, rows = execute_read_only_sql(db, query, max_rows=1000)
         exec_time_ms = round((time.time() - start_time) * 1000, 2)
+
+        log_audit_event(
+            AuditEvent.PRIVILEGED_DATA_OPERATION,
+            actor_id=current_user.id,
+            actor_email=current_user.email,
+            action="EXECUTE_SQL",
+            status="SUCCESS",
+            details={
+                "query_length": len(query),
+                "rows_returned": len(rows),
+                "execution_time_ms": exec_time_ms
+            }
+        )
 
         return {
             "columns": columns,

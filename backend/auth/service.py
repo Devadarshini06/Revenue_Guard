@@ -18,6 +18,7 @@ from backend.auth.tokens import (
 )
 from backend.auth.rbac import ALL_ROLES, Role, get_role_permissions
 from backend.auth.rate_limiter import is_rate_limited, record_failed_attempt, reset_attempts
+from backend.auth.audit import log_audit_event, AuditEvent
 
 
 class AuthService:
@@ -46,14 +47,37 @@ class AuthService:
         if not user:
             record_failed_attempt(throttle_key)
             verify_password("dummy-password", "$argon2id$v=19$m=65536,t=2,p=2$dummy$dummy")
+            log_audit_event(
+                AuditEvent.LOGIN_FAILED,
+                actor_email=clean_email,
+                ip_address=identifier,
+                status="FAILED",
+                details={"reason": "Invalid credentials"}
+            )
             raise ValueError("Invalid email or password.")
 
         if not verify_password(password, user.hashed_password):
             record_failed_attempt(throttle_key)
+            log_audit_event(
+                AuditEvent.LOGIN_FAILED,
+                actor_id=user.id,
+                actor_email=user.email,
+                ip_address=identifier,
+                status="FAILED",
+                details={"reason": "Invalid credentials"}
+            )
             raise ValueError("Invalid email or password.")
 
         if not user.is_active:
             record_failed_attempt(throttle_key)
+            log_audit_event(
+                AuditEvent.LOGIN_FAILED,
+                actor_id=user.id,
+                actor_email=user.email,
+                ip_address=identifier,
+                status="FAILED",
+                details={"reason": "Account deactivated"}
+            )
             raise PermissionError("Account is deactivated. Please contact your system administrator.")
 
         # Successful authentication: reset rate limiter and update last login
@@ -61,6 +85,15 @@ class AuthService:
         user.last_login = datetime.now(timezone.utc).replace(tzinfo=None)
         db.commit()
         db.refresh(user)
+
+        log_audit_event(
+            AuditEvent.LOGIN_SUCCESS,
+            actor_id=user.id,
+            actor_email=user.email,
+            ip_address=identifier,
+            status="SUCCESS",
+            details={"role": user.role}
+        )
 
         return user
 
@@ -109,6 +142,13 @@ class AuthService:
             # Revoke all active sessions for this user as a security safeguard
             db.query(RefreshToken).filter(RefreshToken.user_id == user.id).update({"is_revoked": True})
             db.commit()
+            log_audit_event(
+                AuditEvent.TOKEN_REUSE_DETECTED,
+                actor_id=user.id,
+                actor_email=user.email,
+                status="REVOCATION_ALERT",
+                details={"action": "All active user sessions revoked due to reuse detection"}
+            )
             raise PermissionError("Refresh token has already been used. All sessions have been revoked for security.")
 
         if db_token.expires_at < datetime.now(timezone.utc).replace(tzinfo=None):
@@ -171,6 +211,14 @@ class AuthService:
         db.query(RefreshToken).filter(RefreshToken.user_id == user.id).update({"is_revoked": True})
         db.commit()
 
+        log_audit_event(
+            AuditEvent.PASSWORD_CHANGE,
+            actor_id=user.id,
+            actor_email=user.email,
+            status="SUCCESS",
+            details={"action": "Password changed and all existing sessions revoked"}
+        )
+
     @staticmethod
     def create_user(
         db: Session,
@@ -178,9 +226,10 @@ class AuthService:
         password: str,
         full_name: str,
         role: str,
-        is_active: bool = True
+        is_active: bool = True,
+        acting_user: Optional[User] = None
     ) -> User:
-        """Creates a new platform user."""
+        """Creates a new platform user with privilege escalation guards."""
         clean_email = email.lower().strip()
         existing = db.query(User).filter(User.email == clean_email).first()
         if existing:
@@ -188,6 +237,10 @@ class AuthService:
 
         if role not in ALL_ROLES:
             raise ValueError(f"Invalid role '{role}'. Allowed roles are: {', '.join(ALL_ROLES)}")
+
+        # Privilege escalation prevention: only Super Admin can create another Super Admin
+        if role == Role.SUPER_ADMIN.value and acting_user and acting_user.role != Role.SUPER_ADMIN.value:
+            raise ValueError("Only Super Admins can provision Super Admin accounts.")
 
         valid, errors = validate_password_strength(password)
         if not valid:
@@ -206,17 +259,38 @@ class AuthService:
         db.add(user)
         db.commit()
         db.refresh(user)
+
+        log_audit_event(
+            AuditEvent.USER_CREATED,
+            actor_id=acting_user.id if acting_user else user.id,
+            actor_email=acting_user.email if acting_user else clean_email,
+            status="SUCCESS",
+            details={"created_user_id": user.id, "created_email": clean_email, "role": role}
+        )
+
         return user
 
     @staticmethod
     def update_user_status(db: Session, user_id: int, is_active: bool, acting_user: User) -> User:
-        """Activates or deactivates a user account."""
+        """Activates or deactivates a user account with Super Admin protection."""
         target = db.query(User).filter(User.id == user_id).first()
         if not target:
             raise ValueError("Target user not found.")
 
         if target.id == acting_user.id and not is_active:
             raise ValueError("Administrators cannot deactivate their own account.")
+
+        # Super Admin protection
+        if target.role == Role.SUPER_ADMIN.value and acting_user.role != Role.SUPER_ADMIN.value:
+            raise ValueError("Only Super Admins can modify Super Admin account status.")
+
+        if target.role == Role.SUPER_ADMIN.value and not is_active:
+            super_admin_count = db.query(User).filter(
+                User.role == Role.SUPER_ADMIN.value,
+                User.is_active == True
+            ).count()
+            if super_admin_count <= 1:
+                raise ValueError("Cannot deactivate the last active Super Admin on the platform.")
 
         target.is_active = is_active
         target.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -225,6 +299,15 @@ class AuthService:
             db.query(RefreshToken).filter(RefreshToken.user_id == target.id).update({"is_revoked": True})
         db.commit()
         db.refresh(target)
+
+        log_audit_event(
+            AuditEvent.STATUS_CHANGED,
+            actor_id=acting_user.id,
+            actor_email=acting_user.email,
+            status="SUCCESS",
+            details={"target_user_id": target.id, "target_email": target.email, "is_active": is_active}
+        )
+
         return target
 
     @staticmethod
@@ -237,6 +320,14 @@ class AuthService:
         if not target:
             raise ValueError("Target user not found.")
 
+        # Non-Super-Admins cannot touch Super Admin accounts
+        if target.role == Role.SUPER_ADMIN.value and acting_user.role != Role.SUPER_ADMIN.value:
+            raise ValueError("Only Super Admins can alter Super Admin accounts.")
+
+        # Non-Super-Admins cannot promote anyone to Super Admin
+        if new_role == Role.SUPER_ADMIN.value and acting_user.role != Role.SUPER_ADMIN.value:
+            raise ValueError("Only Super Admins can promote users to Super Admin.")
+
         # Prevent demoting the last active Super Admin
         if target.role == Role.SUPER_ADMIN.value and new_role != Role.SUPER_ADMIN.value:
             super_admin_count = db.query(User).filter(
@@ -246,8 +337,23 @@ class AuthService:
             if super_admin_count <= 1:
                 raise ValueError("Cannot demote the last active Super Admin on the platform.")
 
+        old_role = target.role
         target.role = new_role
         target.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
         db.commit()
         db.refresh(target)
+
+        log_audit_event(
+            AuditEvent.ROLE_CHANGED,
+            actor_id=acting_user.id,
+            actor_email=acting_user.email,
+            status="SUCCESS",
+            details={
+                "target_user_id": target.id,
+                "target_email": target.email,
+                "old_role": old_role,
+                "new_role": new_role
+            }
+        )
+
         return target

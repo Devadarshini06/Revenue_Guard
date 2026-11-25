@@ -54,3 +54,4 @@ def reset_attempts(identifier: str) -> None:
 def clear_all_rate_limits() -> None:
     """Clears all tracked rate limits (useful for test isolation)."""
     _attempts.clear()
+

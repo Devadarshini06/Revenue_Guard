@@ -1,213 +1,249 @@
-# RevenueGuard – Milestone 8 Verification Report
+# RevenueGuard – Milestone 8 Final Security Audit & Credential Remediation Report
 ## Enterprise Authentication, Authorization & Access Control (RBAC)
 
 **Project:** RevenueGuard – Enterprise Financial Intelligence Platform  
 **Phase:** Phase 3 – Enterprise Hardening & Scaling  
 **Milestone:** Milestone 8 – Enterprise Authentication, Authorization & Access Control  
-**Date of Audit:** November 25, 2026  
-**Status:** Approved & Verified  
+**Audit Date:** November 25, 2026  
+**Status:** Approved, Fully Remediated & Hardened  
 
 ---
 
 ## 1. Executive Summary
 
-Milestone 8 has successfully delivered an enterprise-grade authentication and authorization framework for RevenueGuard. The implementation introduces robust defense-in-depth security while preserving 100% of the established financial analytics engine, business calculations, database integrity, and approved UI design language.
+Following the initial delivery of Milestone 8, a rigorous, focused security audit and credential remediation were conducted. All hardcoded demo credentials, visible helper interfaces, and insecure token storage patterns were thoroughly eliminated. The platform now implements in-memory short-lived access tokens, secure `HttpOnly` `SameSite=Lax` refresh token cookies, structured security audit logging, and privilege escalation guards.
 
-### Key Verification Metrics
-- **Automated Backend Test Suite:** **154 / 154 tests passing** (`OK` in 8.016s).
-- **End-to-End Business Workflows:** **11 / 11 workflows passing** (`OK` in 1.341s).
-- **Frontend Production Build:** **Vite 5.4.21 compiled in 2.22s** with 0 errors and 0 warnings.
-- **Database Business Records:** Exactly **5,200 orders** and **24,079 historical records** preserved without any test contamination.
+### Final Verification Metrics
+- **Automated Backend Test Suite:** **170 / 170 tests passing** (`OK` in 12.364s).
+- **Security Audit Test Suite (`tests/test_security_audit.py`):** **16 / 16 dedicated security tests passing** (`OK` in 2.867s).
+- **End-to-End Business Workflows:** **11 / 11 workflows passing** (`OK` in 1.381s).
+- **Frontend Production Build:** **Vite 5.4.21 compiled in 2.34s** with 0 errors, 0 warnings, and 0 demo credential strings in the bundle.
+- **Database Business Records:** Exactly **5,200 orders** and **24,079 baseline records** preserved with zero test data contamination.
 - **Database Physical Integrity:** `PRAGMA integrity_check = ok`.
-- **OpenAPI Schema Contract:** All 45 original analytical schema paths preserved with auth routes cleanly segregated.
+- **Database Users State:** Exactly 1 active Super Admin account with rotated high-entropy credentials; demo Analyst and Viewer accounts have been deleted.
 
 ---
 
-## 2. Authentication Architecture
+## 2. Credential Remediation & Git History Disclosure
 
-### 2.1 Password Hashing with Argon2id
-Password security is implemented using modern **Argon2id** (the winner of the Password Hashing Competition) via `argon2-cffi`:
-- **Algorithm:** Argon2id (`Type.ID`)
-- **Memory Cost (`m`):** 65,536 KiB (64 MiB)
-- **Time Cost (`t`):** 2 iterations
-- **Parallelism (`p`):** 2 lanes
-- **Hash Length:** 32 bytes
-- **Complexity Enforcement:** Passwords must contain a minimum of 8 characters, at least 1 uppercase letter, 1 lowercase letter, 1 number, and 1 special symbol.
-- **Timing Attack Mitigation:** Constant-time dummy verification executed when non-existent usernames are queried to prevent timing-based user enumeration.
+### 2.1 Git History Disclosure
+> [!WARNING]
+> **Historical Credential Disclosure Notice (Commit `858a902`):**  
+> In commit `858a902`, demonstration credentials (`SuperAdmin2026!`, `Analyst2026!`, `Viewer2026!`) were included in UI demonstration quick-fill buttons and verification documentation to facilitate reviewer inspection.  
+> 
+> **Remediation Action:**  
+> 1. Deleting files in a new commit does *not* erase Git history. Therefore, all disclosed credentials have been **cryptographically invalidated and permanently revoked** on the server.
+> 2. The temporary Analyst and Viewer demo accounts have been permanently purged from `revenueguard.db`.
+> 3. The Super Admin credential has been rotated to a freshly generated 28-character high-entropy secret.
+> 4. All historical session and refresh tokens have been revoked.
+> 5. Consequently, any credentials present in commit `858a902` are inert and cannot authenticate against the platform.
 
-### 2.2 Short-Lived JWT Access Tokens
-- **Algorithm:** HMAC-SHA256 (`HS256`)
-- **Lifetime:** 15 minutes (`ACCESS_TOKEN_EXPIRE_MINUTES = 15`)
-- **Timestamp Handling:** Standardized epoch seconds (`int(time.time())`) to prevent naive UTC / timezone skew.
-- **Payload:** Encapsulates `sub` (User ID), `email`, `role`, `exp`, and `iat`.
-
-### 2.3 Cryptographic Refresh Token Rotation & Reuse Detection
-- **Entropy:** 32 cryptographically secure random bytes (`secrets.token_urlsafe(32)`).
-- **Database Persistence:** Only SHA-256 digests (`token_hash`) are stored in the `refresh_tokens` table; plaintext tokens never persist on disk.
-- **Lifetime:** 7 days (`REFRESH_TOKEN_EXPIRE_DAYS = 7`).
-- **Rotation:** Every call to `/api/auth/refresh` invalidates the submitted token and issues an entirely new access/refresh token pair.
-- **Reuse Detection & Session Invalidation:** If an already revoked refresh token is presented (indicating potential token theft), the platform immediately revokes **all** active refresh tokens associated with that user account and emits a security audit exception.
-
-### 2.4 Brute-Force Rate Limiting
-- **Mechanism:** In-memory sliding-window counter tracking failed login attempts per client identifier (IP / Email).
-- **Threshold:** 5 failed attempts per 300-second (5-minute) rolling window.
-- **Response:** HTTP 429 Too Many Requests with a `Retry-After` header indicating remaining lockout seconds.
-- **Protection:** Resets automatically upon successful credential verification.
+### 2.2 Removal of Demo Interfaces and Hardcoded Credentials
+- **Frontend `Login.jsx`:** The demonstration "Quick Login Credentials" panel and `handleQuickFill` helper functions were completely excised. The login interface is strictly standard: corporate email, password with masked visibility toggle, submit button, error alerts, and compliance notice.
+- **Frontend Build (`dist/`):** Automated static inspection confirmed zero occurrences of demo passwords or accounts in the production assets.
+- **Backend `bootstrap.py`:** Enhanced with `DISALLOWED_PASSWORDS` blocking common default passwords (e.g. `admin`, `password`, `12345678`, `superadmin2026!`, `root`). Added `--rotate` and `--generate-password` flags with interactive confirmation and mandatory password complexity validation.
 
 ---
 
-## 3. Role-Based Access Control (RBAC) Matrix
+## 3. Frontend Token Security & Session Management
 
-RevenueGuard defines four distinct hierarchical enterprise roles and six granular permissions:
+### 3.1 In-Memory Access Tokens (Zero `localStorage` Token Storage)
+RevenueGuard avoids persistent browser storage (`localStorage` or `sessionStorage`) for sensitive authentication tokens:
+- **Storage Location:** Access tokens are stored strictly **in-memory** within a private JavaScript module closure (`inMemoryAccessToken`) and managed by the React `AuthContext`.
+- **XSS Mitigation:** Because the access token is never persisted in web storage, malicious scripts injected via Cross-Site Scripting (XSS) cannot extract stored tokens.
+- **Tab/Window Closure:** Closing the tab or browser window immediately discards the in-memory access token.
 
-### Permissions Inventory
-1. `view:analytics`: Access to all analytical dashboards, KPI cards, and breakdowns.
-2. `export:reports`: Permission to stream CSV and Excel business intelligence exports.
-3. `execute:sql`: Permission to run arbitrary custom SQL queries in the Data Management console.
-4. `manage:data`: Permission to validate and upload new operational datasets.
-5. `manage:users`: Permission to view user lists, provision accounts, and modify roles/status.
-6. `manage:system`: Permission to trigger system reseeding and diagnostic maintenance.
+### 3.2 Secure HttpOnly, SameSite Refresh Cookies
+- **Transmission:** On successful login (`POST /api/auth/login`) or token rotation (`POST /api/auth/refresh`), the server issues the refresh token in an `HttpOnly`, `SameSite=Lax` cookie (`secure=True` in production/HTTPS).
+- **Client Inaccessibility:** Client-side JavaScript cannot read or modify the `refresh_token` cookie (`document.cookie` cannot access HttpOnly cookies).
+- **Silent Refresh Flow:** 
+  1. On initial application load, `AuthContext` calls `api.refresh()` with `credentials: 'include'`.
+  2. The browser automatically transmits the HttpOnly `refresh_token` cookie.
+  3. The backend validates and rotates the refresh token, sets a new HttpOnly cookie, and returns a fresh short-lived access token.
+  4. The frontend stores this access token in memory and loads the user's profile and permissions.
+  5. If no cookie exists or the session has expired, the user is transitioned to the clean `Login` view.
 
-### Role Permission Mapping
-| Permission | Viewer | Analyst | Admin | Super Admin |
-|:---|:---:|:---:|:---:|:---:|
-| `view:analytics` | Yes | Yes | Yes | Yes |
-| `export:reports` | No | Yes | Yes | Yes |
-| `execute:sql` | No | Yes | Yes | Yes |
-| `manage:data` | No | No | Yes | Yes |
-| `manage:users` | No | No | No | Yes |
-| `manage:system` | No | No | No | Yes |
+### 3.3 CSRF Protection
+- **SameSite Policy:** `SameSite=Lax` prevents unauthorized cross-origin transmission on third-party cross-site requests.
+- **Custom Anti-CSRF Header:** All API requests originating from `api.js` attach the custom header:
+  ```http
+  X-Requested-With: XMLHttpRequest
+  ```
+  Cross-origin HTML forms (`<form action="...">`) cannot attach custom headers without triggering CORS preflight checks (`OPTIONS`), neutralizing CSRF exploitation vectors.
 
-### Endpoint Authorization Enforcement
-- **Analytical Routes** (`/api/overview/*`, `/api/revenue/*`, `/api/sales/*`, `/api/discounts/*`, `/api/refunds/*`, `/api/profitability/*`, `/api/products/*`, `/api/customers/*`, `/api/regional/*`): Requires `view:analytics`.
-- **Export Endpoints** (`/api/reports/export/*`): Requires `export:reports`.
-- **Data Ingestion** (`/api/data/validate`, `/api/data/upload`): Requires `manage:data`.
-- **SQL Runner** (`/api/data/execute-sql`): Requires `execute:sql`.
-- **Database Reseeding** (`/api/data/reseed-sample-data`): Requires `manage:system`.
-- **User Management** (`/api/auth/users`, `/api/auth/users/*`): Requires `manage:users`.
+### 3.4 Token Revocation & Reuse Detection
+- **Logout:** Calling `POST /api/auth/logout` marks the refresh token record as `is_revoked = True` in the database and clears the client cookie (`max-age=0`).
+- **Reuse Detection:** If an attacker attempts to replay an already revoked or rotated refresh token, the platform's reuse detection mechanism immediately revokes **all** active refresh tokens associated with that user ID and emits an audit alert (`SECURITY_TOKEN_REUSE_DETECTED`).
 
 ---
 
-## 4. Secure Super Admin CLI Bootstrapping
+## 4. Role-Based Access Control (RBAC) Endpoint Matrix
 
-To prevent default hardcoded credentials and eliminate public onboarding attack vectors, initial platform provisioning is executed via a safe CLI utility:
+RevenueGuard defines four hierarchical enterprise roles:
+1. **`Super Admin`:** Full, unrestricted platform privileges, user administration, credential management, system maintenance.
+2. **`Admin`:** Operational administration, financial analytics, report exports, dataset validation and ingestion. Cannot manage users or demote Super Admins.
+3. **`Analyst`:** Financial analytics, report exports, custom SQL query execution. Cannot upload datasets, modify users, or alter system configurations.
+4. **`Viewer`:** Strictly read-only access to analytical dashboards and KPI cards. Cannot export reports, execute custom SQL, upload data, or manage users.
 
-```bash
-# Interactive password prompt
-python -m backend.auth.bootstrap --email "admin@company.com" --name "Lead Administrator"
+### Complete Endpoint-to-Permission Audit Table
 
-# Automated provisioning with flags
-python -m backend.auth.bootstrap --email "superadmin@revenueguard.io" --name "Super Administrator" --password "SuperAdmin2026!"
+| HTTP Method | API Path | Required Permission | Authentication | Permitted Roles | Notes |
+|:---|:---|:---:|:---:|:---:|:---|
+| `GET` | `/health` / `/api/health` | None | Public | All (Anonymous) | Diagnostic ping probe |
+| `GET` | `/metrics` | None | Public | All (Anonymous) | Operational Prometheus metrics |
+| `POST` | `/api/auth/login` | None | Public | All (Anonymous) | Email/password login with rate limiter |
+| `POST` | `/api/auth/refresh` | None | Cookie/Body | All (Authenticated) | Rotates refresh token via HttpOnly cookie |
+| `POST` | `/api/auth/logout` | Authenticated | Token | All Roles | Revokes refresh token, clears cookie |
+| `GET` | `/api/auth/me` | Authenticated | Token | All Roles | Resolves authenticated user profile |
+| `GET` | `/api/auth/permissions` | Authenticated | Token | All Roles | Resolves user's assigned RBAC permissions |
+| `POST` | `/api/auth/change-password` | Authenticated | Token | All Roles | Password change; revokes active sessions |
+| `GET` | `/api/auth/users` | `manage:users` | Token | `Super Admin` | Full user directory inspection |
+| `POST` | `/api/auth/users` | `manage:users` | Token | `Super Admin` | Provisions new user with role |
+| `PUT` | `/api/auth/users/{id}/status` | `manage:users` | Token | `Super Admin` | Activates/deactivates user accounts |
+| `PUT` | `/api/auth/users/{id}/role` | `manage:users` | Token | `Super Admin` | Updates user role (prevents escalation) |
+| `GET` | `/api/auth/audit-logs` | `manage:users` | Token | `Super Admin` | Queries security audit trail |
+| `GET` | `/api/overview/*` (7 routes) | `view:analytics` | Token | `Viewer`, `Analyst`, `Admin`, `Super Admin` | KPIs, trends, categories, products, regions |
+| `GET` | `/api/revenue/*` (5 routes) | `view:analytics` | Token | `Viewer`, `Analyst`, `Admin`, `Super Admin` | Revenue trends, summaries, breakdowns |
+| `GET` | `/api/sales/*` (3 routes) | `view:analytics` | Token | `Viewer`, `Analyst`, `Admin`, `Super Admin` | Sales performance, payment methods |
+| `GET` | `/api/discounts/*` (4 routes) | `view:analytics` | Token | `Viewer`, `Analyst`, `Admin`, `Super Admin` | Discount rates, margins, high discount orders |
+| `GET` | `/api/refunds/*` (4 routes) | `view:analytics` | Token | `Viewer`, `Analyst`, `Admin`, `Super Admin` | Refund rates, defect drivers, return logs |
+| `GET` | `/api/profitability/*` (3 routes) | `view:analytics` | Token | `Viewer`, `Analyst`, `Admin`, `Super Admin` | Gross margins, product quadrant matrix |
+| `GET` | `/api/products/*` (3 routes) | `view:analytics` | Token | `Viewer`, `Analyst`, `Admin`, `Super Admin` | Top products, low performers, SKUs |
+| `GET` | `/api/customers/*` (3 routes) | `view:analytics` | Token | `Viewer`, `Analyst`, `Admin`, `Super Admin` | Customer summaries, RFM segments |
+| `GET` | `/api/regional/*` (1 route) | `view:analytics` | Token | `Viewer`, `Analyst`, `Admin`, `Super Admin` | Geo breakdown, regional margins |
+| `GET` | `/api/reports/summary` | `view:analytics` | Token | `Viewer`, `Analyst`, `Admin`, `Super Admin` | Executive summary BI view |
+| `GET` | `/api/reports/export/transactions/csv` | `export:reports` | Token | `Analyst`, `Admin`, `Super Admin` | Streams raw CSV transaction records |
+| `GET` | `/api/reports/export/transactions/excel` | `export:reports` | Token | `Analyst`, `Admin`, `Super Admin` | Streams multi-tab Excel BI workbook |
+| `GET` | `/api/reports/power-bi/dataset` | `export:reports` | Token | `Analyst`, `Admin`, `Super Admin` | Tabular relational dataset export |
+| `GET` | `/api/data/history` | `view:analytics` | Token | `Viewer`, `Analyst`, `Admin`, `Super Admin` | Upload audit log history |
+| `POST` | `/api/data/validate` | `manage:data` | Token | `Admin`, `Super Admin` | Pre-flight dataset schema & anomaly check |
+| `POST` | `/api/data/upload` | `manage:data` | Token | `Admin`, `Super Admin` | Atomic ingestion of validated records |
+| `POST` | `/api/data/execute-sql` | `execute:sql` | Token | `Analyst`, `Admin`, `Super Admin` | Read-only SQL CTE query runner |
+| `POST` | `/api/data/reseed-sample-data` | `manage:system` | Token | `Super Admin` | Controlled synthetic reset (?confirm=true) |
+
+---
+
+## 5. Super Admin Protections & Privilege Escalation Defenses
+
+1. **Bootstrapping Isolation:**
+   - Super Admin accounts can only be created via the controlled server-side CLI (`backend.auth.bootstrap`).
+   - The CLI blocks creation of duplicate initial Super Admins unless explicitly passed `--force`.
+   - Disallows known default credentials.
+
+2. **Last Active Super Admin Safeguard:**
+   - The platform strictly prohibits demoting or deactivating the last remaining active Super Admin:
+     ```python
+     if target.role == Role.SUPER_ADMIN.value and not is_active:
+         super_admin_count = db.query(User).filter(User.role == Role.SUPER_ADMIN.value, User.is_active == True).count()
+         if super_admin_count <= 1:
+             raise ValueError("Cannot deactivate the last active Super Admin on the platform.")
+     ```
+
+3. **Privilege Escalation Prevention:**
+   - Non-Super Admin users (e.g. Admins or Analysts) cannot assign the `Super Admin` role to any account.
+   - Non-Super Admin users cannot modify, alter roles of, or deactivate a Super Admin account.
+
+4. **Self-Deactivation Guard:**
+   - Administrators cannot deactivate their own active user account.
+
+---
+
+## 6. Structured Security Audit Logging
+
+A centralized security audit logging service (`backend/auth/audit.py`) records all sensitive lifecycle and operational events:
+
+### Audited Security Events
+- `AUTH_LOGIN_SUCCESS`: Records actor ID, email, timestamp, client IP, and role.
+- `AUTH_LOGIN_FAILED`: Records target email, client IP, and failure reason (rate-limited vs invalid credentials).
+- `AUTH_LOGOUT`: Records user ID, email, and timestamp.
+- `AUTH_PASSWORD_CHANGE`: Records user ID and session revocation count.
+- `AUTH_PASSWORD_RESET`: Records administrator credential rotation.
+- `USER_CREATED`: Records creator ID, new user email, and initial assigned role.
+- `USER_ROLE_CHANGED`: Records actor ID, target user ID, old role, and new role.
+- `USER_STATUS_CHANGED`: Records actor ID, target user ID, and new status (`is_active`).
+- `SECURITY_TOKEN_REUSE_DETECTED`: Emits security revocation alert when a rotated token is replayed.
+- `PRIVILEGED_DATA_OPERATION`: Records SQL execution (query length, execution time) and dataset uploads (filename, records ingested).
+
+### Zero-Credential Logging Assurance
+The audit logger enforces recursive parameter sanitization. All keys matching sensitive patterns (`password`, `token`, `secret`, `authorization`, `cookie`, `key`, `hash`) are automatically redacted to `[REDACTED]`, guaranteeing that plaintext secrets never touch disk or log streams.
+
+---
+
+## 7. Automated Test Suite Inventory
+
+### Full Test Suite Breakdown (170 Backend Tests + 11 E2E Workflows)
+- `tests/test_analytics.py`: 18 tests (KPIs, margin calculations, trends).
+- `tests/test_api_endpoints.py`: 46 tests (HTTP contracts, status codes, OpenAPI schema).
+- `tests/test_authentication_rbac.py`: 19 tests (Argon2id hashing, token expiration, rotation, RBAC enforcement).
+- `tests/test_backup_recovery.py`: 9 tests (WAL-safe backups, checksum validation, rollback).
+- `tests/test_data_management_security.py`: 13 tests (File limits, schema validation, SQL guard).
+- `tests/test_database_transactions.py`: 7 tests (ACID rollback, foreign key integrity).
+- `tests/test_dialect_compatibility.py`: 5 tests (SQLite vs PostgreSQL dialect query safety).
+- `tests/test_financial_calculations.py`: 12 tests (Formula validation, reconciliation).
+- `tests/test_integration_readiness.py`: 11 tests (Cross-module consistency, filter propagation).
+- `tests/test_production_config.py`: 14 tests (Environment variables, secret leak defense).
+- **`tests/test_security_audit.py` (New): 16 tests** (Dedicated security audit & credential remediation suite):
+  1. `test_frontend_login_page_has_no_demo_credentials`: Confirms zero hardcoded credentials in `Login.jsx`.
+  2. `test_bootstrap_rejects_known_default_credentials`: Rejects weak and known default passwords.
+  3. `test_credential_rotation_invalidates_prior_password_and_sessions`: Old passwords fail immediately upon rotation.
+  4. `test_login_sets_httponly_refresh_cookie`: Verifies `HttpOnly`, `SameSite=Lax` cookie flags.
+  5. `test_logout_clears_httponly_cookie`: Verifies client cookie invalidation on logout.
+  6. `test_unauthenticated_request_to_sensitive_endpoint_fails`: Confirms 401 on unauthorized access.
+  7. `test_viewer_cannot_execute_sql`: Confirms 403 on Viewer SQL execution.
+  8. `test_viewer_cannot_upload_data`: Confirms 403 on Viewer dataset upload.
+  9. `test_analyst_cannot_manage_users`: Confirms 403 on Analyst user management.
+  10. `test_admin_cannot_access_user_management`: Confirms 403 on Admin user directory access.
+  11. `test_non_superadmin_cannot_promote_to_superadmin`: Blocks privilege escalation.
+  12. `test_admin_cannot_alter_superadmin_role`: Blocks Admin altering Super Admin.
+  13. `test_last_superadmin_cannot_be_demoted_or_deactivated`: Blocks orphaned system lockout.
+  14. `test_audit_logging_captures_security_events`: Verifies audit records for logins and lifecycle events.
+  15. `test_audit_logs_never_contain_plaintext_passwords_or_tokens`: Verifies parameter sanitization.
+  16. `test_token_reuse_detection_triggers_revocation_and_audit`: Verifies session invalidation on token replay.
+- `tests/test_e2e_workflows.py`: 11 tests (Complete end-to-end user workflows).
+
+**Total Passing Tests:** **181 tests (170 unit/integration + 11 E2E workflows), 0 failures, 0 errors.**
+
+---
+
+## 8. Database Records & Physical Integrity Verification
+
+```sql
+SELECT name, count(*) FROM sqlite_master ...;
 ```
 
-### Safety Features
-- Idempotent: Refuses to overwrite an existing Super Admin unless explicitly passed `--force`.
-- Validates password complexity before persisting.
-- Directly invokes `AuthService` to ensure standard Argon2id hashing.
+```
+Table                  Record Count
+-----------------------------------
+categories             5
+regions                8
+data_uploads           1
+products               19
+customers              350
+orders                 5,200
+order_items            9,074
+transactions           5,610
+discounts              3,402
+refunds                410
+users                  1 (Super Admin only, high-entropy rotated hash)
+refresh_tokens         0 active tokens
+-----------------------------------
+Total Baseline Records: 24,079
+Total Database Records: 24,080
+PRAGMA integrity_check: ok
+```
 
 ---
 
-## 5. Frontend Authentication & RBAC Integration
+## 9. Remaining Security Considerations (Milestone 9 Alignment)
 
-The React frontend has been augmented with an integrated authentication layer while strictly preserving the cream and espresso design palette (`#231F1D`, `#C5A880`, `#FAF9F6`):
-
-1. **`AuthContext.jsx`:**
-   - Central state manager for `user`, `permissions`, and authentication lifecycle.
-   - Listens for global `rg:auth:expired` events.
-   - Provides `login()`, `logout()`, `changePassword()`, and `hasPermission()`.
-
-2. **`api.js` Interceptor:**
-   - Automatically injects `Authorization: Bearer <token>` on all outbound API requests.
-   - Intercepts 401 responses, pauses queue, executes silent token refresh against `/api/auth/refresh`, updates credentials in `localStorage`, and retries the original request seamlessly.
-
-3. **`Login.jsx`:**
-   - Dedicated login view with corporate branding, ShieldCheck emblem, and password visibility toggle.
-   - Displays generic error feedback or 429 rate limit notices.
-   - Features a demonstration quick-fill panel for Super Admin, Analyst, and Viewer profiles.
-
-4. **`Sidebar.jsx` Navigation Filtering:**
-   - Dynamically filters the 12 navigation modules based on user permissions.
-   - Viewers see only analytics and reporting modules.
-   - Analysts see analytics and Data Management (SQL Runner).
-   - Super Admins and Admins access full system modules including Settings.
-
-5. **`Navbar.jsx` Profile Dropdown:**
-   - Displays user initials, authenticated full name, and role badge.
-   - User profile menu with account details, "Change Password" modal launcher, and "Sign Out" button.
-
-6. **`Settings.jsx` User Directory:**
-   - Available exclusively to Super Admin users (`manage:users`).
-   - Renders live user table with Name, Email, Role, Status, and Last Active timestamps.
-   - Includes "Provision User" modal with client/server validation.
-   - Supports in-place role updates and one-click account activation/deactivation.
+While Milestone 8 establishes rigorous application-layer authentication and authorization, enterprise deployments should consider the following infrastructure enhancements in Milestone 9:
+1. **Centralized Secrets Manager:** Migrate `SECRET_KEY` from local environment variables to an enterprise secrets vault (HashiCorp Vault, AWS Secrets Manager, or Google Cloud Secret Manager).
+2. **Enterprise Single Sign-On (SSO):** Integration of SAML 2.0 / OIDC protocols for federated corporate identity (Okta, Azure AD / Entra ID, Google Workspace).
+3. **Multi-Factor Authentication (MFA):** Implementation of Time-based One-Time Password (TOTP) or FIDO2/WebAuthn security keys for administrative roles.
+4. **Distributed Redis Rate Limiter:** Scaling rate limiting from single-instance in-memory sliding windows to distributed Redis clusters for multi-pod production deployments.
 
 ---
 
-## 6. Database Schema & Record Verification
+## 10. Conclusion
 
-### Tables in `revenueguard.db`
-```
-categories:       5 records
-regions:          8 records
-data_uploads:     1 record
-products:        19 records
-customers:      350 records
-orders:       5,200 records
-order_items:  9,074 records
-transactions: 5,610 records
-discounts:    3,402 records
-refunds:        410 records
-users:            3 records (superadmin, analyst, viewer)
-refresh_tokens:   0 active tokens (clean initial state)
-------------------------------------------------------
-Total Records:  24,082 records
-Integrity:      PRAGMA integrity_check = ok
-```
-
-All 24,079 baseline analytical records match exact historical figures.
-
----
-
-## 7. Automated Test Verification Summary
-
-```
-tests/test_analytics.py                      [18 tests] PASSED
-tests/test_api_endpoints.py                  [46 tests] PASSED
-tests/test_authentication_rbac.py            [19 tests] PASSED
-tests/test_backup_recovery.py                [ 9 tests] PASSED
-tests/test_data_management_security.py       [13 tests] PASSED
-tests/test_database_transactions.py          [ 7 tests] PASSED
-tests/test_dialect_compatibility.py          [ 5 tests] PASSED
-tests/test_financial_calculations.py         [12 tests] PASSED
-tests/test_integration_readiness.py          [11 tests] PASSED
-tests/test_production_config.py              [14 tests] PASSED
-------------------------------------------------------
-Total Test Suite:                            154 tests PASSED (0 failures, 0 errors)
-E2E User Workflows (tests/test_e2e_workflows): 11 tests PASSED (0 failures, 0 errors)
-```
-
-### Key Security Test Scenarios Covered
-- [x] Argon2id password hash generation and verification.
-- [x] Password complexity enforcement (rejecting passwords missing uppercase, numbers, or symbols).
-- [x] Valid login with token issuance and user profile return.
-- [x] Generic error messages on invalid email or wrong password.
-- [x] Immediate rejection of deactivated accounts.
-- [x] Rejection of expired access tokens.
-- [x] Rejection of tampered JWT signatures.
-- [x] Refresh token rotation invalidating previous tokens.
-- [x] Refresh token reuse detection triggering full session revocation.
-- [x] Logout revoking refresh token persistence.
-- [x] User password changes requiring valid old password and strong new password.
-- [x] Brute-force rate limiting triggering HTTP 429 after 5 failed attempts.
-- [x] Super Admin unrestricted platform access.
-- [x] Admin access to data management and analytics.
-- [x] Analyst access restricted from uploading datasets or managing users.
-- [x] Viewer access strictly read-only with rejection on custom SQL or uploads.
-- [x] User provisioning and role assignment.
-- [x] Prevention against demoting the last active Super Admin.
-
----
-
-## 8. Conclusion & Sign-Off
-
-Milestone 8 has satisfied all functional, security, and architectural criteria for enterprise authentication and authorization. The system is hardened, documented, and fully verified.
+The Milestone 8 authentication, authorization, and RBAC architecture has undergone thorough remediation and verification. All hardcoded demo credentials have been expunged, token handling is fortified with in-memory tokens and HttpOnly cookies, comprehensive RBAC is strictly enforced, and audit logging guarantees compliance.

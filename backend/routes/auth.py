@@ -5,14 +5,16 @@ Endpoints for login, logout, token rotation, user profile, password management,
 and Super Admin user administration.
 """
 
-from typing import List
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from typing import List, Optional
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Response
 from sqlalchemy.orm import Session
 from backend.database import get_db
 from backend.models import User
+from backend.config import settings
 from backend.auth.service import AuthService
 from backend.auth.dependencies import get_current_user, require_permission
 from backend.auth.rbac import Permission, get_role_permissions
+from backend.auth.audit import log_audit_event, get_recent_audit_logs, AuditEvent
 from backend.auth.schemas import (
     LoginRequest,
     LoginResponse,
@@ -31,8 +33,8 @@ router = APIRouter(prefix="/auth", tags=["Authentication & Access Control"])
 
 
 @router.post("/login", response_model=LoginResponse)
-def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)):
-    """Authenticates user with email/password and returns JWT access + refresh tokens."""
+def login(payload: LoginRequest, request: Request, response: Response, db: Session = Depends(get_db)):
+    """Authenticates user with email/password and returns JWT access + HttpOnly refresh cookie."""
     client_ip = request.client.host if request.client else "unknown"
     try:
         user = AuthService.authenticate_user(
@@ -42,6 +44,17 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
             identifier=f"{client_ip}:{payload.email.lower()}"
         )
         access_token, refresh_token, _ = AuthService.create_user_tokens(db=db, user=user)
+
+        # Set secure HttpOnly cookie for refresh token to prevent XSS theft
+        response.set_cookie(
+            key="refresh_token",
+            value=refresh_token,
+            httponly=True,
+            samesite="lax",
+            secure=settings.is_production,
+            path="/api/auth",
+            max_age=7 * 86400
+        )
 
         return LoginResponse(
             access_token=access_token,
@@ -58,31 +71,72 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
 
 @router.post("/logout", response_model=MessageResponse)
 def logout(
-    payload: RefreshTokenRequest,
+    request: Request,
+    response: Response,
+    payload: Optional[RefreshTokenRequest] = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Revokes the active refresh token and terminates the session."""
-    revoked = AuthService.revoke_refresh_token(db=db, raw_token=payload.refresh_token)
+    raw_token = (payload.refresh_token if payload and payload.refresh_token else "") or request.cookies.get("refresh_token") or ""
+    if raw_token:
+        AuthService.revoke_refresh_token(db=db, raw_token=raw_token)
+
+    # Invalidate cookie on client
+    response.delete_cookie(key="refresh_token", path="/api/auth", samesite="lax", httponly=True)
+
+    log_audit_event(
+        AuditEvent.LOGOUT,
+        actor_id=current_user.id,
+        actor_email=current_user.email,
+        status="SUCCESS",
+        details={"action": "User logged out successfully"}
+    )
     return MessageResponse(message="Successfully logged out.", detail="Refresh token revoked.")
 
 
 @router.post("/refresh", response_model=RefreshTokenResponse)
-def refresh_token(payload: RefreshTokenRequest, db: Session = Depends(get_db)):
-    """Rotates refresh token and returns new short-lived access token and refresh token."""
-    try:
-        new_access, new_refresh, _ = AuthService.rotate_refresh_token(
-            db=db,
-            raw_token=payload.refresh_token
+def refresh_token(
+    request: Request,
+    response: Response,
+    payload: Optional[RefreshTokenRequest] = None,
+    db: Session = Depends(get_db)
+):
+    """Rotates refresh token via HttpOnly cookie or request body, returning fresh token pair."""
+    raw_token = (payload.refresh_token if payload and payload.refresh_token else "") or request.cookies.get("refresh_token") or ""
+    if not raw_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Refresh token required in HttpOnly cookie or request body."
         )
+
+    try:
+        new_access, new_refresh, user = AuthService.rotate_refresh_token(
+            db=db,
+            raw_token=raw_token
+        )
+
+        # Set rotated HttpOnly cookie
+        response.set_cookie(
+            key="refresh_token",
+            value=new_refresh,
+            httponly=True,
+            samesite="lax",
+            secure=settings.is_production,
+            path="/api/auth",
+            max_age=7 * 86400
+        )
+
         return RefreshTokenResponse(
             access_token=new_access,
             refresh_token=new_refresh,
             token_type="Bearer"
         )
     except PermissionError as exc:
+        response.delete_cookie(key="refresh_token", path="/api/auth", samesite="lax", httponly=True)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc))
     except ValueError as exc:
+        response.delete_cookie(key="refresh_token", path="/api/auth", samesite="lax", httponly=True)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc))
 
 
@@ -148,11 +202,21 @@ def create_user(
             email=payload.email,
             password=payload.password,
             full_name=payload.full_name,
-            role=payload.role
+            role=payload.role,
+            acting_user=current_user
         )
         return UserSummary.model_validate(new_user)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+
+@router.get("/audit-logs")
+def view_audit_logs(
+    limit: int = 50,
+    current_user: User = Depends(require_permission(Permission.MANAGE_USERS))
+):
+    """Returns recent security audit logs (Super Admin only)."""
+    return get_recent_audit_logs(limit=limit)
 
 
 @router.put("/users/{user_id}/status", response_model=UserSummary)
@@ -193,3 +257,4 @@ def update_user_role(
         return UserSummary.model_validate(updated)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
