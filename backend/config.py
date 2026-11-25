@@ -1,32 +1,52 @@
 import os
-from typing import List
+from typing import List, Dict, Optional
 
 class Settings:
     PROJECT_NAME: str = "RevenueGuard"
     VERSION: str = "1.0.0"
     API_PREFIX: str = "/api"
     
-    # Environment mode: development, testing, production
-    ENVIRONMENT: str = os.getenv("ENVIRONMENT", "development").lower()
-    
-    # Debug mode is strictly disabled in production
-    DEBUG: bool = os.getenv("DEBUG", "false").lower() in ("true", "1", "yes") if os.getenv("ENVIRONMENT", "").lower() != "production" else False
-    
-    # Interactive API Documentation: disabled in production by default unless explicitly enabled
-    DOCS_ENABLED: bool = os.getenv("DOCS_ENABLED", "true" if os.getenv("ENVIRONMENT", "").lower() != "production" else "false").lower() in ("true", "1", "yes")
+    def __init__(self, env_dict: Optional[Dict[str, str]] = None):
+        self._env = env_dict if env_dict is not None else os.environ
 
-    # Database URL: default to sqlite for self-contained execution, override with postgresql://...
-    DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///./revenueguard.db")
+    @property
+    def ENVIRONMENT(self) -> str:
+        return self._env.get("ENVIRONMENT", "development").lower()
     
-    # Application Secret Key (must be overridden in production)
-    SECRET_KEY: str = os.getenv("SECRET_KEY", "revenueguard-insecure-dev-secret-key-change-in-prod")
+    @property
+    def DEBUG(self) -> bool:
+        # Debug mode is strictly disabled in production
+        if self.ENVIRONMENT == "production":
+            return False
+        return self._env.get("DEBUG", "false").lower() in ("true", "1", "yes")
     
-    # Allowed CORS Origins
+    @property
+    def DOCS_ENABLED(self) -> bool:
+        val = self._env.get("DOCS_ENABLED")
+        if val is not None:
+            return val.lower() in ("true", "1", "yes")
+        # In production docs are disabled by default
+        return self.ENVIRONMENT != "production"
+
+    @property
+    def DATABASE_URL(self) -> str:
+        return self._env.get("DATABASE_URL", "sqlite:///./revenueguard.db")
+    
+    @property
+    def SECRET_KEY(self) -> str:
+        return self._env.get("SECRET_KEY", "revenueguard-insecure-dev-secret-key-change-in-prod")
+    
     @property
     def CORS_ORIGINS(self) -> List[str]:
-        raw_origins = os.getenv("ALLOWED_ORIGINS", "")
+        raw_origins = self._env.get("ALLOWED_ORIGINS", "")
         if raw_origins:
-            return [o.strip() for o in raw_origins.split(",") if o.strip()]
+            origins = [o.strip() for o in raw_origins.split(",") if o.strip()]
+            if self.ENVIRONMENT == "production":
+                # Wildcard CORS rejection in production
+                origins = [o for o in origins if o != "*"]
+                if not origins:
+                    return ["http://localhost", "https://localhost"]
+            return origins
         
         # Development safe defaults
         if self.ENVIRONMENT == "production":
@@ -41,5 +61,22 @@ class Settings:
             "http://127.0.0.1:8000",
         ]
 
-settings = Settings()
+    def validate_production_configuration(self) -> List[str]:
+        """
+        Validates required production environment settings.
+        Returns a list of configuration violations or missing items.
+        """
+        issues = []
+        if self.ENVIRONMENT == "production":
+            secret = self._env.get("SECRET_KEY", "")
+            if not secret or secret == "revenueguard-insecure-dev-secret-key-change-in-prod" or len(secret) < 32:
+                issues.append("SECRET_KEY must be set to a cryptographically strong value (at least 32 characters) in production.")
+            
+            raw_origins = self._env.get("ALLOWED_ORIGINS", "")
+            if not raw_origins:
+                issues.append("ALLOWED_ORIGINS must be explicitly configured in production.")
+            elif "*" in [o.strip() for o in raw_origins.split(",")]:
+                issues.append("Wildcard '*' in ALLOWED_ORIGINS is prohibited in production.")
+        return issues
 
+settings = Settings()
