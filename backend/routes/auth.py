@@ -77,22 +77,27 @@ def logout(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Revokes the active refresh token and terminates the session."""
+    """Revokes the active refresh token, invalidates access tokens, and terminates the session."""
     raw_token = (payload.refresh_token if payload and payload.refresh_token else "") or request.cookies.get("refresh_token") or ""
-    if raw_token:
-        AuthService.revoke_refresh_token(db=db, raw_token=raw_token)
+    AuthService.logout_user(db=db, user=current_user, raw_token=raw_token or None)
 
     # Invalidate cookie on client
-    response.delete_cookie(key="refresh_token", path="/api/auth", samesite="lax", httponly=True)
+    response.delete_cookie(
+        key="refresh_token",
+        path="/api/auth",
+        samesite="lax",
+        httponly=True,
+        secure=settings.is_production,
+    )
 
     log_audit_event(
         AuditEvent.LOGOUT,
         actor_id=current_user.id,
         actor_email=current_user.email,
         status="SUCCESS",
-        details={"action": "User logged out successfully"}
+        details={"action": "User logged out and active access/refresh tokens invalidated"}
     )
-    return MessageResponse(message="Successfully logged out.", detail="Refresh token revoked.")
+    return MessageResponse(message="Successfully logged out.", detail="Session and tokens revoked.")
 
 
 @router.post("/refresh", response_model=RefreshTokenResponse)
@@ -133,10 +138,10 @@ def refresh_token(
             token_type="Bearer"
         )
     except PermissionError as exc:
-        response.delete_cookie(key="refresh_token", path="/api/auth", samesite="lax", httponly=True)
+        response.delete_cookie(key="refresh_token", path="/api/auth", samesite="lax", httponly=True, secure=settings.is_production)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc))
     except ValueError as exc:
-        response.delete_cookie(key="refresh_token", path="/api/auth", samesite="lax", httponly=True)
+        response.delete_cookie(key="refresh_token", path="/api/auth", samesite="lax", httponly=True, secure=settings.is_production)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc))
 
 
@@ -239,6 +244,27 @@ def update_user_status(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
 
+@router.post("/users/{user_id}/revoke-sessions", response_model=MessageResponse)
+def revoke_user_sessions(
+    user_id: int,
+    current_user: User = Depends(require_permission(Permission.MANAGE_USERS)),
+    db: Session = Depends(get_db)
+):
+    """Administratively revokes all active access and refresh tokens for a user (Super Admin only)."""
+    try:
+        target = AuthService.revoke_user_sessions(
+            db=db,
+            user_id=user_id,
+            acting_user=current_user
+        )
+        return MessageResponse(
+            message=f"All active sessions revoked for {target.email}.",
+            detail="Both refresh tokens and previously issued access tokens have been invalidated."
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+
 @router.put("/users/{user_id}/role", response_model=UserSummary)
 def update_user_role(
     user_id: int,
@@ -255,6 +281,27 @@ def update_user_role(
             acting_user=current_user
         )
         return UserSummary.model_validate(updated)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+
+@router.post("/users/{user_id}/revoke-sessions", response_model=MessageResponse)
+def revoke_user_sessions(
+    user_id: int,
+    current_user: User = Depends(require_permission(Permission.MANAGE_USERS)),
+    db: Session = Depends(get_db)
+):
+    """Administratively revokes all active access and refresh tokens for a user (Super Admin only)."""
+    try:
+        target = AuthService.revoke_user_sessions(
+            db=db,
+            user_id=user_id,
+            acting_user=current_user
+        )
+        return MessageResponse(
+            message=f"All active sessions revoked for {target.email}.",
+            detail="Both refresh tokens and previously issued access tokens have been invalidated."
+        )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 

@@ -24,6 +24,7 @@ def create_access_token(
     user_id: int,
     email: str,
     role: str,
+    token_version: int = 1,
     expires_delta: Optional[timedelta] = None
 ) -> str:
     """Creates a short-lived signed JWT access token using epoch timestamps."""
@@ -37,6 +38,7 @@ def create_access_token(
         "sub": str(user_id),
         "email": email,
         "role": role,
+        "tv": token_version,
         "type": "access",
         "jti": str(uuid.uuid4()),
         "iat": now_ts,

@@ -173,6 +173,7 @@ class User(Base):
     full_name = Column(String(150), nullable=False)
     role = Column(String(50), nullable=False, default="Viewer", index=True) # Super Admin, Admin, Analyst, Viewer
     is_active = Column(Boolean, default=True, nullable=False)
+    token_version = Column(Integer, default=1, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
     last_login = Column(DateTime, nullable=True)

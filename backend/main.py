@@ -7,7 +7,7 @@ import uuid
 import logging
 
 from backend.config import settings
-from backend.database import Base, engine
+from backend.database import Base, engine, ensure_schema_migrations
 from backend.seed_data import seed_database
 from backend.routes import (
     overview,
@@ -31,8 +31,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger("revenueguard")
 
-# Ensure tables are created
+# Ensure tables are created and additive migrations applied
 Base.metadata.create_all(bind=engine)
+ensure_schema_migrations()
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -48,15 +49,56 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Accept", "X-Requested-With", "X-Request-ID"],
 )
 
-# Production Security Headers & Correlation ID Middleware
+STATE_CHANGING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
+
+def _is_trusted_origin(origin: str, request: Request) -> bool:
+    """Checks whether an Origin header is explicitly allowed by CORS or matches the request host."""
+    if origin in settings.CORS_ORIGINS:
+        return True
+    host = request.headers.get("host")
+    if host:
+        same_origin_http = f"http://{host}"
+        same_origin_https = f"https://{host}"
+        if origin in (same_origin_http, same_origin_https):
+            return True
+    return False
+
+
+# Production Security Headers, CSRF Guard & Correlation ID Middleware
 @app.middleware("http")
 async def security_and_timing_middleware(request: Request, call_next):
     start_time = time.time()
     request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
+
+    # Defense-in-depth CSRF protection for cookie-authenticated state-changing requests
+    if request.method in STATE_CHANGING_METHODS:
+        auth_header = request.headers.get("authorization", "")
+        has_bearer = auth_header.lower().startswith("bearer ") and len(auth_header) > 7
+        uses_auth_cookie = bool(request.cookies.get("refresh_token") or request.cookies.get("access_token"))
+        if uses_auth_cookie and not has_bearer:
+            sec_fetch_site = request.headers.get("sec-fetch-site", "").lower()
+            origin = request.headers.get("origin")
+            x_requested_with = request.headers.get("x-requested-with", "").strip()
+
+            csrf_error = None
+            if sec_fetch_site == "cross-site":
+                csrf_error = "Cross-site cookie-authenticated request blocked."
+            elif origin and not _is_trusted_origin(origin, request):
+                csrf_error = "Untrusted origin for cookie-authenticated request."
+            elif not x_requested_with:
+                csrf_error = "Missing required anti-CSRF header (X-Requested-With)."
+
+            if csrf_error:
+                resp = JSONResponse(status_code=403, content={"detail": csrf_error})
+                resp.headers["X-Request-ID"] = request_id
+                resp.headers["X-Content-Type-Options"] = "nosniff"
+                resp.headers["X-Frame-Options"] = "DENY"
+                return resp
     
     try:
         response = await call_next(request)

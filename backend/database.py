@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 from backend.config import settings
 
@@ -39,5 +39,15 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+def ensure_schema_migrations():
+    """Applies safe additive schema migrations for existing databases."""
+    inspector = inspect(engine)
+    if "users" in inspector.get_table_names():
+        columns = {col["name"] for col in inspector.get_columns("users")}
+        if "token_version" not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 1"))
 
 

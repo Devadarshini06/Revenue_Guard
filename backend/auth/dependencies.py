@@ -82,7 +82,8 @@ def get_current_user(
                 hashed_password="[SYNTHESIZED_SUPER_ADMIN]",
                 full_name="Super Administrator",
                 role="Super Admin",
-                is_active=True
+                is_active=True,
+                token_version=1,
             )
         else:
             raise HTTPException(
@@ -95,6 +96,14 @@ def get_current_user(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Account is deactivated. Contact an administrator.",
+        )
+
+    token_version = payload.get("tv")
+    if token_version is None or int(token_version) != user.token_version:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication token has been revoked. Please log in again.",
+            headers={"WWW-Authenticate": "Bearer"},
         )
 
     return user

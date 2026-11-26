@@ -103,7 +103,12 @@ class AuthService:
         Generates access token and persistent refresh token.
         Returns (access_token, raw_refresh_token, expires_at).
         """
-        access_token = create_access_token(user_id=user.id, email=user.email, role=user.role)
+        access_token = create_access_token(
+            user_id=user.id,
+            email=user.email,
+            role=user.role,
+            token_version=user.token_version or 1,
+        )
 
         raw_refresh = generate_refresh_token()
         token_hash = hash_refresh_token(raw_refresh)
@@ -139,7 +144,9 @@ class AuthService:
 
         # Refresh token reuse detection
         if db_token.is_revoked:
-            # Revoke all active sessions for this user as a security safeguard
+            # Revoke all active sessions (refresh tokens + access tokens) for this user
+            user.token_version = (user.token_version or 1) + 1
+            user.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
             db.query(RefreshToken).filter(RefreshToken.user_id == user.id).update({"is_revoked": True})
             db.commit()
             log_audit_event(
@@ -147,7 +154,7 @@ class AuthService:
                 actor_id=user.id,
                 actor_email=user.email,
                 status="REVOCATION_ALERT",
-                details={"action": "All active user sessions revoked due to reuse detection"}
+                details={"action": "All active user sessions and access tokens revoked due to reuse detection"}
             )
             raise PermissionError("Refresh token has already been used. All sessions have been revoked for security.")
 
@@ -160,7 +167,12 @@ class AuthService:
         db_token.is_revoked = True
 
         # Generate new token pair
-        new_access = create_access_token(user_id=user.id, email=user.email, role=user.role)
+        new_access = create_access_token(
+            user_id=user.id,
+            email=user.email,
+            role=user.role,
+            token_version=user.token_version or 1,
+        )
         new_raw_refresh = generate_refresh_token()
         new_hash = hash_refresh_token(new_raw_refresh)
         new_expires = get_refresh_token_expiration()
@@ -190,6 +202,20 @@ class AuthService:
         return False
 
     @staticmethod
+    def logout_user(db: Session, user: User, raw_token: Optional[str] = None) -> None:
+        """Revokes the presented refresh token (if any) and bumps token_version to invalidate access tokens."""
+        if raw_token:
+            token_hash = hash_refresh_token(raw_token)
+            db_token = db.query(RefreshToken).filter(RefreshToken.token_hash == token_hash).first()
+            if db_token:
+                db_token.is_revoked = True
+        db_user = db.query(User).filter(User.id == user.id).first()
+        if db_user:
+            db_user.token_version = (db_user.token_version or 1) + 1
+            db_user.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        db.commit()
+
+    @staticmethod
     def change_password(
         db: Session,
         user: User,
@@ -205,6 +231,7 @@ class AuthService:
             raise ValueError(f"Password does not meet complexity requirements: {'; '.join(errors)}")
 
         user.hashed_password = hash_password(new_password)
+        user.token_version = (user.token_version or 1) + 1
         user.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
         # Invalidate existing refresh tokens upon password change for session security
@@ -295,7 +322,8 @@ class AuthService:
         target.is_active = is_active
         target.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
         if not is_active:
-            # Invalidate all active sessions for deactivated user
+            # Invalidate all active sessions and access tokens for deactivated user
+            target.token_version = (target.token_version or 1) + 1
             db.query(RefreshToken).filter(RefreshToken.user_id == target.id).update({"is_revoked": True})
         db.commit()
         db.refresh(target)
@@ -339,6 +367,7 @@ class AuthService:
 
         old_role = target.role
         target.role = new_role
+        target.token_version = (target.token_version or 1) + 1
         target.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
         db.commit()
         db.refresh(target)
@@ -353,6 +382,40 @@ class AuthService:
                 "target_email": target.email,
                 "old_role": old_role,
                 "new_role": new_role
+            }
+        )
+
+        return target
+
+    @staticmethod
+    def revoke_user_sessions(db: Session, user_id: int, acting_user: User) -> User:
+        """Administratively revokes all active access and refresh tokens for a target user."""
+        target = db.query(User).filter(User.id == user_id).first()
+        if not target:
+            raise ValueError("Target user not found.")
+
+        if target.role == Role.SUPER_ADMIN.value and acting_user.role != Role.SUPER_ADMIN.value:
+            raise ValueError("Only Super Admins can revoke Super Admin sessions.")
+
+        target.token_version = (target.token_version or 1) + 1
+        target.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        revoked_count = db.query(RefreshToken).filter(
+            RefreshToken.user_id == target.id,
+            RefreshToken.is_revoked == False
+        ).update({"is_revoked": True})
+        db.commit()
+        db.refresh(target)
+
+        log_audit_event(
+            AuditEvent.SESSION_REVOKED,
+            actor_id=acting_user.id,
+            actor_email=acting_user.email,
+            status="SUCCESS",
+            details={
+                "target_user_id": target.id,
+                "target_email": target.email,
+                "revoked_refresh_tokens": revoked_count,
+                "new_token_version": target.token_version,
             }
         )
 

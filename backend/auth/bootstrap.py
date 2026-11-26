@@ -112,6 +112,7 @@ def rotate_super_admin_password(email: str, new_password: str) -> None:
             sys.exit(1)
 
         user.hashed_password = hash_password(clean_pwd)
+        user.token_version = (user.token_version or 1) + 1
         user.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
         # Invalidate all active sessions / refresh tokens

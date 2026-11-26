@@ -389,6 +389,324 @@ class TestSecurityAuditAndCredentialRemediation(unittest.TestCase):
         finally:
             db.close()
 
+    # -------------------------------------------------------------
+    # 4. Immediate Access-Token Revocation Verification
+    # -------------------------------------------------------------
+
+    def test_access_token_rejected_immediately_after_logout(self):
+        """Previously issued access token must be rejected immediately after logout."""
+        login_res = self.client.post("/api/auth/login", json_data={
+            "email": "analyst.audit@revenueguard.test",
+            "password": "AnalystSecureP@ss2026!"
+        })
+        self.assertEqual(login_res.status_code, 200)
+        tokens = login_res.json()
+        headers = {"authorization": f"Bearer {tokens['access_token']}"}
+
+        # Valid before logout
+        self.assertEqual(self.client.get("/api/auth/me", headers=headers).status_code, 200)
+
+        # Logout
+        logout_res = self.client.post(
+            "/api/auth/logout",
+            json_data={"refresh_token": tokens["refresh_token"]},
+            headers=headers
+        )
+        self.assertEqual(logout_res.status_code, 200)
+
+        # Previously issued access token is immediately rejected
+        self.assertEqual(self.client.get("/api/auth/me", headers=headers).status_code, 401)
+        self.assertEqual(self.client.get("/api/overview/kpis", headers=headers).status_code, 401)
+
+    def test_access_token_rejected_immediately_after_password_change(self):
+        """Previously issued access token must be rejected immediately after password change."""
+        login_res = self.client.post("/api/auth/login", json_data={
+            "email": "analyst.audit@revenueguard.test",
+            "password": "AnalystSecureP@ss2026!"
+        })
+        tokens = login_res.json()
+        headers = {"authorization": f"Bearer {tokens['access_token']}"}
+        self.assertEqual(self.client.get("/api/auth/me", headers=headers).status_code, 200)
+
+        # Change password
+        cp_res = self.client.post(
+            "/api/auth/change-password",
+            json_data={
+                "current_password": "AnalystSecureP@ss2026!",
+                "new_password": "AnalystNewP@ssword2026#"
+            },
+            headers=headers
+        )
+        self.assertEqual(cp_res.status_code, 200)
+
+        # Prior access token is immediately rejected
+        self.assertEqual(self.client.get("/api/auth/me", headers=headers).status_code, 401)
+        self.assertEqual(self.client.get("/api/overview/kpis", headers=headers).status_code, 401)
+
+    def test_access_token_rejected_immediately_after_deactivation(self):
+        """Previously issued access token must be rejected immediately after account deactivation."""
+        login_res = self.client.post("/api/auth/login", json_data={
+            "email": "viewer.audit@revenueguard.test",
+            "password": "ViewerSecureP@ss2026!"
+        })
+        tokens = login_res.json()
+        viewer_headers = {"authorization": f"Bearer {tokens['access_token']}"}
+        self.assertEqual(self.client.get("/api/auth/me", headers=viewer_headers).status_code, 200)
+
+        # Super Admin deactivates viewer
+        deact_res = self.client.put(
+            f"/api/auth/users/{self.viewer.id}/status",
+            json_data={"is_active": False},
+            headers={"authorization": f"Bearer {self.superadmin_token}"}
+        )
+        self.assertEqual(deact_res.status_code, 200)
+
+        # Prior access token is immediately rejected
+        res = self.client.get("/api/overview/kpis", headers=viewer_headers)
+        self.assertIn(res.status_code, (401, 403))
+
+    def test_access_token_rejected_immediately_after_refresh_reuse_detection(self):
+        """Previously issued access tokens must be rejected immediately when refresh token reuse is detected."""
+        login_res = self.client.post("/api/auth/login", json_data={
+            "email": "viewer.audit@revenueguard.test",
+            "password": "ViewerSecureP@ss2026!"
+        })
+        initial = login_res.json()
+
+        # Legitimate rotation
+        rot_res = self.client.post("/api/auth/refresh", json_data={"refresh_token": initial["refresh_token"]})
+        self.assertEqual(rot_res.status_code, 200)
+        rotated = rot_res.json()
+
+        # Replay initial refresh token -> triggers reuse detection
+        reuse_res = self.client.post("/api/auth/refresh", json_data={"refresh_token": initial["refresh_token"]})
+        self.assertEqual(reuse_res.status_code, 401)
+
+        # Both initial and rotated access tokens are now rejected immediately
+        self.assertEqual(
+            self.client.get("/api/auth/me", headers={"authorization": f"Bearer {initial['access_token']}"}).status_code,
+            401
+        )
+        self.assertEqual(
+            self.client.get("/api/auth/me", headers={"authorization": f"Bearer {rotated['access_token']}"}).status_code,
+            401
+        )
+
+    def test_access_token_rejected_immediately_after_admin_session_revocation(self):
+        """Administrative session revocation must immediately invalidate both access and refresh tokens."""
+        login_res = self.client.post("/api/auth/login", json_data={
+            "email": "analyst.audit@revenueguard.test",
+            "password": "AnalystSecureP@ss2026!"
+        })
+        tokens = login_res.json()
+        analyst_headers = {"authorization": f"Bearer {tokens['access_token']}"}
+        self.assertEqual(self.client.get("/api/auth/me", headers=analyst_headers).status_code, 200)
+
+        # Super Admin revokes all sessions for analyst
+        rev_res = self.client.post(
+            f"/api/auth/users/{self.analyst.id}/revoke-sessions",
+            headers={"authorization": f"Bearer {self.superadmin_token}"}
+        )
+        self.assertEqual(rev_res.status_code, 200)
+
+        # Access token and refresh token are both rejected immediately
+        self.assertEqual(self.client.get("/api/auth/me", headers=analyst_headers).status_code, 401)
+        self.assertEqual(
+            self.client.post("/api/auth/refresh", json_data={"refresh_token": tokens["refresh_token"]}).status_code,
+            401
+        )
+
+    # -------------------------------------------------------------
+    # 5. Account Deactivation & Reactivation Session Isolation
+    # -------------------------------------------------------------
+
+    def test_deactivated_account_blocked_and_reactivation_does_not_restore_sessions(self):
+        """Deactivated accounts cannot login, refresh, or use existing tokens; reactivation keeps old sessions dead."""
+        login_res = self.client.post("/api/auth/login", json_data={
+            "email": "analyst.audit@revenueguard.test",
+            "password": "AnalystSecureP@ss2026!"
+        })
+        self.assertEqual(login_res.status_code, 200)
+        tokens = login_res.json()
+        analyst_headers = {"authorization": f"Bearer {tokens['access_token']}"}
+
+        # Deactivate account
+        deact = self.client.put(
+            f"/api/auth/users/{self.analyst.id}/status",
+            json_data={"is_active": False},
+            headers={"authorization": f"Bearer {self.superadmin_token}"}
+        )
+        self.assertEqual(deact.status_code, 200)
+
+        # 1. Cannot log in
+        login_blocked = self.client.post("/api/auth/login", json_data={
+            "email": "analyst.audit@revenueguard.test",
+            "password": "AnalystSecureP@ss2026!"
+        })
+        self.assertEqual(login_blocked.status_code, 403)
+
+        # 2. Cannot refresh access token
+        refresh_blocked = self.client.post("/api/auth/refresh", json_data={"refresh_token": tokens["refresh_token"]})
+        self.assertEqual(refresh_blocked.status_code, 401)
+
+        # 3. Cannot access protected endpoints with existing access token
+        self.assertEqual(self.client.get("/api/overview/kpis", headers=analyst_headers).status_code, 403)
+
+        # Reactivate account
+        react = self.client.put(
+            f"/api/auth/users/{self.analyst.id}/status",
+            json_data={"is_active": True},
+            headers={"authorization": f"Bearer {self.superadmin_token}"}
+        )
+        self.assertEqual(react.status_code, 200)
+
+        # 4. Previously issued access token and refresh token MUST STILL FAIL after reactivation
+        self.assertEqual(self.client.get("/api/auth/me", headers=analyst_headers).status_code, 401)
+        self.assertEqual(
+            self.client.post("/api/auth/refresh", json_data={"refresh_token": tokens["refresh_token"]}).status_code,
+            401
+        )
+
+    # -------------------------------------------------------------
+    # 6. CSRF, Cookie Security & CORS Verification
+    # -------------------------------------------------------------
+
+    def test_cookie_authenticated_refresh_and_logout_csrf_protection(self):
+        """Cookie-authenticated refresh and logout reject missing X-Requested-With, untrusted Origin, and cross-site Sec-Fetch-Site."""
+        login_res = self.client.post("/api/auth/login", json_data={
+            "email": "viewer.audit@revenueguard.test",
+            "password": "ViewerSecureP@ss2026!"
+        })
+        tokens = login_res.json()
+        cookie_hdr = f"refresh_token={tokens['refresh_token']}"
+
+        # Missing X-Requested-With header on cookie-authenticated refresh -> 403
+        res_no_header = self.client.post(
+            "/api/auth/refresh",
+            headers={"authorization": "", "cookie": cookie_hdr}
+        )
+        self.assertEqual(res_no_header.status_code, 403)
+
+        # Untrusted Origin even with X-Requested-With -> 403
+        res_bad_origin = self.client.post(
+            "/api/auth/refresh",
+            headers={
+                "authorization": "",
+                "cookie": cookie_hdr,
+                "origin": "https://evil.attacker.example",
+                "x-requested-with": "XMLHttpRequest",
+            }
+        )
+        self.assertEqual(res_bad_origin.status_code, 403)
+
+        # Cross-site Sec-Fetch-Site -> 403
+        res_cross_site = self.client.post(
+            "/api/auth/refresh",
+            headers={
+                "authorization": "",
+                "cookie": cookie_hdr,
+                "sec-fetch-site": "cross-site",
+                "x-requested-with": "XMLHttpRequest",
+            }
+        )
+        self.assertEqual(res_cross_site.status_code, 403)
+
+        # Untrusted Origin on cookie-authenticated logout -> 403
+        res_logout_evil = self.client.post(
+            "/api/auth/logout",
+            headers={
+                "authorization": "",
+                "cookie": f"{cookie_hdr}; access_token={tokens['access_token']}",
+                "origin": "https://evil.attacker.example",
+                "x-requested-with": "XMLHttpRequest",
+            }
+        )
+        self.assertEqual(res_logout_evil.status_code, 403)
+
+        # Trusted Origin + X-Requested-With -> 200
+        res_trusted = self.client.post(
+            "/api/auth/refresh",
+            headers={
+                "authorization": "",
+                "cookie": cookie_hdr,
+                "origin": "http://localhost:5173",
+                "x-requested-with": "XMLHttpRequest",
+            }
+        )
+        self.assertEqual(res_trusted.status_code, 200)
+
+    def test_cors_preflight_blocks_untrusted_origin_and_allows_trusted_origin(self):
+        """CORS preflight rejects untrusted origins and allows configured origins with credentials."""
+        bad_preflight = self.client.request(
+            "OPTIONS",
+            "/api/auth/refresh",
+            headers={
+                "origin": "https://evil.attacker.example",
+                "access-control-request-method": "POST",
+                "access-control-request-headers": "X-Requested-With, Content-Type",
+            }
+        )
+        self.assertEqual(bad_preflight.status_code, 400)
+        self.assertIsNone(bad_preflight.headers.get("access-control-allow-origin"))
+
+        good_preflight = self.client.request(
+            "OPTIONS",
+            "/api/auth/refresh",
+            headers={
+                "origin": "http://localhost:5173",
+                "access-control-request-method": "POST",
+                "access-control-request-headers": "X-Requested-With, Content-Type",
+            }
+        )
+        self.assertEqual(good_preflight.status_code, 200)
+        self.assertEqual(good_preflight.headers.get("access-control-allow-origin"), "http://localhost:5173")
+        self.assertEqual(good_preflight.headers.get("access-control-allow-credentials"), "true")
+
+    def test_cookie_attributes_in_development_and_production(self):
+        """Refresh cookie has HttpOnly, SameSite=Lax, Path=/api/auth, and Secure=True in production."""
+        from backend.config import settings
+        original_env = settings._env
+        try:
+            # Development mode
+            settings._env = {"ENVIRONMENT": "development"}
+            dev_res = self.client.post("/api/auth/login", json_data={
+                "email": "viewer.audit@revenueguard.test",
+                "password": "ViewerSecureP@ss2026!"
+            })
+            dev_cookie = dev_res.headers.get("set-cookie", "").lower()
+            self.assertIn("httponly", dev_cookie)
+            self.assertIn("samesite=lax", dev_cookie)
+            self.assertIn("path=/api/auth", dev_cookie)
+            self.assertNotIn("; secure", dev_cookie)
+
+            # Production mode
+            settings._env = {"ENVIRONMENT": "production"}
+            prod_res = self.client.post("/api/auth/login", json_data={
+                "email": "viewer.audit@revenueguard.test",
+                "password": "ViewerSecureP@ss2026!"
+            })
+            prod_cookie = prod_res.headers.get("set-cookie", "").lower()
+            self.assertIn("httponly", prod_cookie)
+            self.assertIn("samesite=lax", prod_cookie)
+            self.assertIn("path=/api/auth", prod_cookie)
+            self.assertIn("secure", prod_cookie)
+        finally:
+            settings._env = original_env
+
+    def test_metrics_not_exposed_and_protected_endpoints_require_auth(self):
+        """Verify /metrics is not exposed and business/admin endpoints reject anonymous requests."""
+        self.assertEqual(self.client.get("/metrics", headers={"authorization": ""}).status_code, 404)
+        for path in [
+            "/api/overview/kpis",
+            "/api/revenue/summary",
+            "/api/reports/export/transactions/csv",
+            "/api/data/history",
+            "/api/auth/users",
+            "/api/auth/audit-logs",
+        ]:
+            res = self.client.get(path, headers={"authorization": ""})
+            self.assertEqual(res.status_code, 401, f"Expected 401 for unauthenticated GET {path}")
+
 
 if __name__ == "__main__":
     unittest.main()
